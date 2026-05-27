@@ -15,6 +15,10 @@ pub struct RunCtl {
 pub struct AppState {
     pub registry: Arc<AgentRegistry>,
     pub runs: Arc<Mutex<HashMap<Uuid, Arc<RunCtl>>>>,
+    /// Cancellation handles for in-flight `improve_workflow` agent calls.
+    pub improves: Arc<Mutex<HashMap<Uuid, CancellationToken>>>,
+    /// Cancellation handles for in-flight `start_chat` agent calls.
+    pub chats: Arc<Mutex<HashMap<Uuid, CancellationToken>>>,
 }
 
 impl AppState {
@@ -22,6 +26,8 @@ impl AppState {
         Self {
             registry: Arc::new(AgentRegistry::new()),
             runs: Arc::new(Mutex::new(HashMap::new())),
+            improves: Arc::new(Mutex::new(HashMap::new())),
+            chats: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }

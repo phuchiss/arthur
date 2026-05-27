@@ -2,7 +2,33 @@ import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { api, Availability, Workflow, WorkflowSummary } from "./lib/ipc";
 import { RunView } from "./components/RunView";
+import { ChatView } from "./components/ChatView";
+import { EditorTarget, WorkflowEditor } from "./components/WorkflowEditor";
 import "./App.css";
+
+const NEW_TEMPLATE = [
+  "---",
+  "name: New Workflow",
+  "inputs: [task]",
+  "defaults: { agent: claude, autonomy: edit }",
+  "---",
+  "",
+  "## plan",
+  "```step",
+  "agent: claude",
+  "autonomy: read",
+  "output: plan",
+  "```",
+  "Plan this task: {{ inputs.task }}",
+  "",
+  "## implement",
+  "```step",
+  "agent: claude",
+  "autonomy: full",
+  "```",
+  "Implement the plan from the previous step.",
+  "",
+].join("\n");
 
 export default function App() {
   const [project, setProject] = useState<string | null>(null);
@@ -11,6 +37,8 @@ export default function App() {
   const [selected, setSelected] = useState<Workflow | null>(null);
   const [inputs, setInputs] = useState<Record<string, string>>({});
   const [run, setRun] = useState<{ workflow: Workflow; inputs: Record<string, string>; key: number } | null>(null);
+  const [editor, setEditor] = useState<{ target: EditorTarget; content: string } | null>(null);
+  const [chatting, setChatting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const refreshAgents = () => api.checkAgents().then(setAgents).catch((e) => setError(String(e)));
@@ -25,6 +53,8 @@ export default function App() {
       setProject(dir);
       setSelected(null);
       setRun(null);
+      setEditor(null);
+      setChatting(false);
       try {
         setWorkflows(await api.listWorkflows(dir));
       } catch (e) {
@@ -46,6 +76,8 @@ export default function App() {
   const selectWorkflow = async (path: string) => {
     setError(null);
     setRun(null);
+    setEditor(null);
+    setChatting(false);
     try {
       const wf = await api.getWorkflow(path);
       setSelected(wf);
@@ -53,6 +85,39 @@ export default function App() {
     } catch (e) {
       setError(String(e));
     }
+  };
+
+  const newWorkflow = () => {
+    setError(null);
+    setRun(null);
+    setChatting(false);
+    setEditor({ target: { mode: "new" }, content: NEW_TEMPLATE });
+  };
+
+  const openChat = () => {
+    setError(null);
+    setRun(null);
+    setEditor(null);
+    setChatting(true);
+  };
+
+  const editWorkflow = async () => {
+    if (!selected?.path) return;
+    setError(null);
+    try {
+      const content = await api.readWorkflowSource(selected.path);
+      setRun(null);
+      setChatting(false);
+      setEditor({ target: { mode: "edit", path: selected.path }, content });
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  const onEditorSaved = async (path: string) => {
+    setEditor(null);
+    await reloadWorkflows();
+    await selectWorkflow(path);
   };
 
   const canRun =
@@ -82,6 +147,11 @@ export default function App() {
           </button>
         </div>
         <div className="project">
+          {project && (
+            <button className={`ghost ${chatting ? "active" : ""}`} onClick={openChat}>
+              Chat
+            </button>
+          )}
           <button className="ghost" onClick={pickProject}>
             {project ? "Change project" : "Open project…"}
           </button>
@@ -100,9 +170,14 @@ export default function App() {
           <div className="sidebar-head">
             <span>Workflows</span>
             {project && (
-              <button className="link" onClick={reloadWorkflows}>
-                ↻
-              </button>
+              <span className="sidebar-head-actions">
+                <button className="link" title="new workflow" onClick={newWorkflow}>
+                  ＋
+                </button>
+                <button className="link" title="reload" onClick={reloadWorkflows}>
+                  ↻
+                </button>
+              </span>
             )}
           </div>
           {!project && (
@@ -130,7 +205,18 @@ export default function App() {
         </aside>
 
         <section className="content">
-          {run ? (
+          {chatting ? (
+            <ChatView projectDir={project!} agents={agents} onBack={() => setChatting(false)} />
+          ) : editor ? (
+            <WorkflowEditor
+              target={editor.target}
+              initialContent={editor.content}
+              projectDir={project!}
+              agents={agents}
+              onClose={() => setEditor(null)}
+              onSaved={onEditorSaved}
+            />
+          ) : run ? (
             <RunView
               key={run.key}
               workflow={run.workflow}
@@ -140,7 +226,12 @@ export default function App() {
             />
           ) : selected ? (
             <div className="detail">
-              <h2>{selected.name}</h2>
+              <div className="detail-head">
+                <h2>{selected.name}</h2>
+                <button className="ghost" onClick={editWorkflow}>
+                  Edit
+                </button>
+              </div>
               {selected.inputs.length > 0 && (
                 <div className="inputs">
                   {selected.inputs.map((i) => (

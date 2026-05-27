@@ -30,6 +30,11 @@ pub enum LogEvent {
         step_id: String,
         line: String,
     },
+    /// The agent's session id, captured mid-run so the next turn can resume it.
+    SessionId {
+        step_id: String,
+        session_id: String,
+    },
     Stderr {
         step_id: String,
         line: String,

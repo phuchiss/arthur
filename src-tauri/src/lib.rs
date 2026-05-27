@@ -1,4 +1,5 @@
 mod agents;
+mod chatstore;
 mod commands;
 mod engine;
 mod runstore;
@@ -37,6 +38,16 @@ pub fn run() {
             commands::check_agents,
             commands::list_workflows,
             commands::get_workflow,
+            commands::read_workflow_source,
+            commands::parse_workflow_source,
+            commands::save_workflow,
+            commands::create_workflow,
+            commands::improve_workflow,
+            commands::cancel_improve,
+            commands::start_chat,
+            commands::cancel_chat,
+            commands::load_chat,
+            commands::save_chat,
             commands::start_run,
             commands::approve,
             commands::cancel,

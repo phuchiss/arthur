@@ -41,6 +41,7 @@ export type LogEvent =
   | { type: "run_started"; run_id: string; workflow: string }
   | { type: "step_started"; step_id: string; title: string; agent: string; model: string | null; attempt: number }
   | { type: "stdout"; step_id: string; line: string }
+  | { type: "session_id"; step_id: string; session_id: string }
   | { type: "stderr"; step_id: string; line: string }
   | { type: "step_finished"; step_id: string; exit_code: number; attempt: number }
   | { type: "step_skipped"; step_id: string }
@@ -53,6 +54,16 @@ export type LogEvent =
   | { type: "done" }
   | { type: "error"; message: string };
 
+/** Mirrors the Rust `chatstore::ChatSession` (serde snake_case). */
+export type ChatMessage = { role: "user" | "assistant"; text: string };
+export type ChatSession = {
+  session_id?: string;
+  agent: string;
+  model?: string;
+  autonomy: string;
+  messages: ChatMessage[];
+};
+
 export { Channel };
 
 export const api = {
@@ -60,6 +71,43 @@ export const api = {
   listWorkflows: (projectDir: string) =>
     invoke<WorkflowSummary[]>("list_workflows", { projectDir }),
   getWorkflow: (path: string) => invoke<Workflow>("get_workflow", { path }),
+  readWorkflowSource: (path: string) => invoke<string>("read_workflow_source", { path }),
+  parseWorkflowSource: (content: string, path?: string) =>
+    invoke<Workflow>("parse_workflow_source", { content, path }),
+  saveWorkflow: (path: string, content: string) =>
+    invoke<void>("save_workflow", { path, content }),
+  createWorkflow: (args: {
+    projectDir: string;
+    scope: "project" | "global";
+    fileName: string;
+    content: string;
+  }) => invoke<string>("create_workflow", args),
+  improveWorkflow: (args: {
+    improveId: string;
+    agent: string;
+    content: string;
+    instruction?: string;
+    model?: string;
+    projectDir?: string;
+  }) => invoke<string>("improve_workflow", args),
+  cancelImprove: (improveId: string) => invoke<void>("cancel_improve", { improveId }),
+  startChat: (
+    args: {
+      chatId: string;
+      agent: string;
+      prompt: string;
+      autonomy: "read" | "edit" | "full";
+      model?: string;
+      projectDir: string;
+      resume?: string;
+    },
+    onLog: Channel<LogEvent>
+  ) => invoke<void>("start_chat", { ...args, onLog }),
+  cancelChat: (chatId: string) => invoke<void>("cancel_chat", { chatId }),
+  loadChat: (projectDir: string) =>
+    invoke<ChatSession | null>("load_chat", { projectDir }),
+  saveChat: (projectDir: string, session: ChatSession) =>
+    invoke<void>("save_chat", { projectDir, session }),
   startRun: (
     args: { workflowPath: string; projectDir: string; inputs: Record<string, string> },
     onLog: Channel<LogEvent>

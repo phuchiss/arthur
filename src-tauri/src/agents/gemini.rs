@@ -1,4 +1,4 @@
-use super::{resolve_bin, AgentAdapter, Availability, BuiltCommand, CaptureKind};
+use super::{resolve_bin, AgentAdapter, Availability, BuiltCommand, CaptureKind, StreamFormat};
 use crate::engine::model::{AgentInvocation, Autonomy};
 use tokio::process::Command;
 
@@ -25,6 +25,7 @@ impl AgentAdapter for Gemini {
         BuiltCommand {
             command,
             capture: CaptureKind::Stdout,
+            format: StreamFormat::Text,
         }
     }
 

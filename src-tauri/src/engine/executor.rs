@@ -155,6 +155,7 @@ pub async fn run_workflow(
                     prompt,
                     working_dir: working_dir.clone(),
                     step_id: step.id.clone(),
+                    resume: None,
                 };
 
                 let result = match (runner)(invocation, sink.clone(), cancel.clone()).await {

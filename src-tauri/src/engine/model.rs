@@ -71,6 +71,9 @@ pub struct AgentInvocation {
     pub prompt: String,
     pub working_dir: PathBuf,
     pub step_id: String,
+    /// Prior session id to continue, if any (e.g. claude `--resume`). Lets a
+    /// multi-turn chat keep context across one-shot CLI invocations.
+    pub resume: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]

@@ -1,4 +1,4 @@
-use super::{resolve_bin, AgentAdapter, Availability, BuiltCommand, CaptureKind};
+use super::{resolve_bin, AgentAdapter, Availability, BuiltCommand, CaptureKind, StreamFormat};
 use crate::engine::model::{AgentInvocation, Autonomy};
 use tokio::process::Command;
 
@@ -30,6 +30,7 @@ impl AgentAdapter for Codex {
         BuiltCommand {
             command,
             capture: CaptureKind::File(result_file),
+            format: StreamFormat::Text,
         }
     }
 

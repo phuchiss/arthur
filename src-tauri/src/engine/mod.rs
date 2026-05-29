@@ -35,6 +35,17 @@ pub enum LogEvent {
         step_id: String,
         session_id: String,
     },
+    /// Per-turn token usage reported by the agent (claude stream-json `result`
+    /// event). The UI accumulates these across turns to show a session total.
+    TokenUsage {
+        step_id: String,
+        input_tokens: u64,
+        output_tokens: u64,
+        cache_creation_input_tokens: u64,
+        cache_read_input_tokens: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cost_usd: Option<f64>,
+    },
     /// Slash commands the agent advertises (ACP `available_commands_update`),
     /// surfaced to the chat's `/` palette.
     AvailableCommands {
@@ -49,6 +60,11 @@ pub enum LogEvent {
         step_id: String,
         exit_code: i32,
         attempt: u32,
+        /// The agent's authoritative final message for this step (same value
+        /// stored in `ctx.steps`). The UI uses this for workflow→chat context
+        /// instead of scraping streamed stdout, which is empty or noisy for
+        /// file-capture (codex) and stream-json (claude) agents.
+        final_text: String,
     },
     StepSkipped {
         step_id: String,

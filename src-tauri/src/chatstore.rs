@@ -8,6 +8,25 @@ pub struct ChatMessage {
     pub text: String,
 }
 
+/// Running token totals for one chat session. Currently only populated by the
+/// claude stream-json transport — other agents omit it and the UI hides the
+/// chip until at least one turn reports usage.
+#[derive(Serialize, Deserialize, Clone, Default, Debug, PartialEq)]
+pub struct TokenTotals {
+    #[serde(default)]
+    pub input_tokens: u64,
+    #[serde(default)]
+    pub output_tokens: u64,
+    #[serde(default)]
+    pub cache_creation_input_tokens: u64,
+    #[serde(default)]
+    pub cache_read_input_tokens: u64,
+    #[serde(default)]
+    pub cost_usd: f64,
+    #[serde(default)]
+    pub turns: u64,
+}
+
 /// A persisted chat conversation. Multiple of these exist per project — the
 /// `conv_id` is the primary key and is reused as the live ACP-connection key.
 #[derive(Serialize, Deserialize, Clone, Default)]
@@ -35,11 +54,20 @@ pub struct ChatSession {
     /// Short human label, typically derived from the first user message.
     #[serde(default)]
     pub title: String,
+    /// Staged workflow-result preamble that hasn't been consumed by a send yet.
+    /// Persisted so it survives reload/session-switch instead of living only in
+    /// transient React state.
+    #[serde(default)]
+    pub pending_context: Option<String>,
     /// Unix seconds; touched by every save.
     #[serde(default)]
     pub updated_at: u64,
     #[serde(default)]
     pub created_at: u64,
+    /// Cumulative token usage for the session. `None` for sessions saved before
+    /// this feature shipped, or for agents that don't report usage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens: Option<TokenTotals>,
 }
 
 /// Light summary used by `list_chats` so the sidebar doesn't ship full message

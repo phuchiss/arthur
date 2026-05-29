@@ -12,6 +12,7 @@ import {
   Mode,
   MODE_LABELS,
   PermissionOption,
+  TokenTotals,
   UserQuestion,
   WorkflowSummary,
 } from "../lib/ipc";
@@ -130,6 +131,19 @@ const mdComponents = {
 
 function nowTime(): string {
   return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+function compactNumber(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`;
+  return `${(n / 1_000_000).toFixed(n < 10_000_000 ? 1 : 0)}M`;
+}
+
+function formatCost(usd: number): string {
+  if (usd <= 0) return "";
+  if (usd < 0.01) return "<$0.01";
+  if (usd < 1) return `$${usd.toFixed(2)}`;
+  return `$${usd.toFixed(2)}`;
 }
 
 // Claude's ACP bridge often can't fulfil the AskUserQuestion tool, so the
@@ -318,12 +332,14 @@ export function ChatView({
   agents,
   workflows,
   convId,
+  fresh,
   onSessionsChanged,
 }: {
   projectDir: string;
   agents: Availability[];
   workflows: WorkflowSummary[];
   convId?: string;
+  fresh?: boolean;
   onSessionsChanged?: () => void;
 }) {
   const available = AGENTS.filter((id) => agents.find((a) => a.id === id)?.available);
@@ -363,6 +379,10 @@ export function ChatView({
   const [busy, setBusy] = useState(false);
   const [hasSession, setHasSession] = useState(false);
   const [title, setTitle] = useState("");
+  // Cumulative token usage for this conversation. `null` until the first
+  // claude-stream-json `result` event arrives (other agents don't report it,
+  // so the chip stays hidden).
+  const [tokens, setTokens] = useState<TokenTotals | null>(null);
 
   const [localCommands, setLocalCommands] = useState<CommandInfo[]>([]);
   const [acpCommands, setAcpCommands] = useState<CommandInfo[]>([]);
@@ -393,6 +413,8 @@ export function ChatView({
     sessionRef.current = s.session_id ?? null;
     setHasSession(!!s.session_id);
     setTitle(s.title ?? "");
+    setPendingContext(s.pending_context ?? null);
+    setTokens(s.tokens ?? null);
     setMessages(
       s.messages.map((m) => ({ role: m.role as Message["role"], text: m.text }))
     );
@@ -400,7 +422,14 @@ export function ChatView({
   };
 
   // Restore the requested chat (or most recent for this project) on mount.
+  // A `fresh` mount with no convId is an explicit "New session" — stay blank
+  // instead of restoring the most recent chat (which is what an undefined
+  // convId means to the backend).
   useEffect(() => {
+    if (fresh && !convId) {
+      loadedRef.current = true;
+      return;
+    }
     api
       .loadChat(projectDir, convId)
       .then((s) => {
@@ -436,11 +465,13 @@ export function ChatView({
         conv_id: convIdRef.current,
         transport,
         title,
+        pending_context: pendingContext ?? undefined,
+        tokens: tokens ?? undefined,
       })
       .then(() => onSessionsChanged?.())
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [busy, messages, agent, model, mode, title]);
+  }, [busy, messages, agent, model, mode, title, pendingContext, tokens]);
 
   const onAgentChange = (next: string) => {
     setAgent(next);
@@ -492,6 +523,19 @@ export function ChatView({
       return next;
     });
 
+  const accumulateTokens = (ev: Extract<LogEvent, { type: "token_usage" }>) => {
+    setTokens((prev) => ({
+      input_tokens: (prev?.input_tokens ?? 0) + ev.input_tokens,
+      output_tokens: (prev?.output_tokens ?? 0) + ev.output_tokens,
+      cache_creation_input_tokens:
+        (prev?.cache_creation_input_tokens ?? 0) + ev.cache_creation_input_tokens,
+      cache_read_input_tokens:
+        (prev?.cache_read_input_tokens ?? 0) + ev.cache_read_input_tokens,
+      cost_usd: (prev?.cost_usd ?? 0) + (ev.cost_usd ?? 0),
+      turns: (prev?.turns ?? 0) + 1,
+    }));
+  };
+
   const finalize = (error?: string) => {
     // Claude CLI reports a stale --resume id as "No conversation found";
     // drop our cached session id so the next send starts a fresh conversation
@@ -539,9 +583,12 @@ export function ChatView({
     setPop(null);
     setBusy(true);
 
-    // Per-step stdout buffers and the order of completion so we know which
-    // one is "last" when producing the summary.
+    // Per-step stdout buffers (live display) and the authoritative final text
+    // each step reports on completion. `finalByStep` is what feeds the next
+    // agent's context — stdout is noisy/empty for codex (file capture) and
+    // claude stream-json, so we never derive context from it.
     const stepText: Record<string, string> = {};
+    const finalByStep: Record<string, string> = {};
     const stepOrder: string[] = [];
 
     const result = await new Promise<{ ok: boolean; lastStepText: string }>((resolve) => {
@@ -571,6 +618,7 @@ export function ChatView({
             appendToLast(`⚠ ${ev.line}\n`);
             break;
           case "step_finished":
+            finalByStep[ev.step_id] = ev.final_text;
             appendToLast(
               ev.exit_code === 0
                 ? `✓ ${ev.step_id} done\n`
@@ -579,6 +627,9 @@ export function ChatView({
             break;
           case "step_skipped":
             appendToLast(`⤼ skipped ${ev.step_id}\n`);
+            break;
+          case "token_usage":
+            accumulateTokens(ev);
             break;
           case "retrying":
             appendToLast(`↻ retry ${ev.step_id} (attempt ${ev.attempt})\n`);
@@ -599,17 +650,17 @@ export function ChatView({
           case "done":
             appendToLast(`\n✔ workflow done\n`);
             finalize();
-            resolve({ ok: true, lastStepText: stepText[lastStep] ?? "" });
+            resolve({ ok: true, lastStepText: finalByStep[lastStep] ?? stepText[lastStep] ?? "" });
             break;
           case "cancelled":
             appendToLast(`\n■ workflow cancelled\n`);
             finalize();
-            resolve({ ok: false, lastStepText: stepText[lastStep] ?? "" });
+            resolve({ ok: false, lastStepText: finalByStep[lastStep] ?? stepText[lastStep] ?? "" });
             break;
           case "error":
             appendToLast(`\n✗ workflow error: ${ev.message}\n`);
             finalize(ev.message);
-            resolve({ ok: false, lastStepText: stepText[lastStep] ?? "" });
+            resolve({ ok: false, lastStepText: finalByStep[lastStep] ?? stepText[lastStep] ?? "" });
             break;
         }
       };
@@ -631,8 +682,8 @@ export function ChatView({
     setBusy(false);
 
     if (result.ok && result.lastStepText.trim()) {
-      // Stage a context preamble for the next agent prompt. Cap to keep
-      // prompts manageable; user can still scroll the full output in chat.
+      // Cap to keep prompts manageable; user can still scroll the full output
+      // in chat.
       const snippet = result.lastStepText.trim().slice(0, 2000);
       const summary =
         `Context: workflow \`/${wf.name}\` just ran in this session.\n` +
@@ -640,7 +691,23 @@ export function ChatView({
         "```\n" +
         snippet +
         "\n```";
-      setPendingContext(summary);
+
+      if (available.length) {
+        // Auto-inject: fire an agent turn now so the chat session ingests the
+        // workflow result immediately, instead of waiting for the user's next
+        // send. The display row stays compact (the full output is already
+        // visible in the workflow message right above).
+        const injectPrompt =
+          `${summary}\n\n` +
+          `Take this workflow result into account for the rest of our session. ` +
+          `If it calls for follow-up work, proceed; otherwise briefly confirm ` +
+          `you've registered it.`;
+        await runAgentTurn(injectPrompt, `↳ workflow output → ${agent}`);
+      } else {
+        // No CLI available to inject into — fall back to staging the preamble
+        // for whenever an agent prompt is next sent.
+        setPendingContext(summary);
+      }
     }
   };
 
@@ -678,36 +745,11 @@ export function ChatView({
   const removeAttachment = (path: string) =>
     setAttachments((prev) => prev.filter((p) => p !== path));
 
-  const send = async () => {
-    const draftText = draft.trim();
-    if ((!draftText && attachments.length === 0) || busy) return;
-
-    // /<workflow> intercept: run inline instead of talking to the agent.
-    const wfCmd = tryParseWorkflowCommand(draftText, workflows);
-    if (wfCmd) {
-      await runWorkflowInline(wfCmd.wf, wfCmd.inputArg);
-      return;
-    }
-
-    if (!available.length) return;
-    // Build the prompt the agent sees: optional workflow-context preamble
-    // (consumed once), attached file refs, then the user's text.
-    const ctxBlock = pendingContext ? `${pendingContext}\n\n` : "";
-    const attachBlock =
-      attachments.length > 0
-        ? `Attached files:\n${attachments.map((p) => `- @${p}`).join("\n")}\n\n`
-        : "";
-    const prompt = ctxBlock + attachBlock + draftText;
-    // Display message keeps attachments visible as @-refs even when the user
-    // sent no prose — gives a record of what was shared.
-    const displayText =
-      attachments.length > 0 && !draftText
-        ? attachments.map((p) => `@${p}`).join(" ")
-        : draftText;
-
-    setDraft("");
-    setAttachments([]);
-    setPop(null);
+  // Execute one agent turn: push the user+assistant pair, stream the response,
+  // auto-recover from a stale --resume id, then clear transient turn state.
+  // Shared by manual send() and the post-workflow auto-inject so both paths
+  // behave identically (resume handling, error display, pendingContext reset).
+  const runAgentTurn = async (prompt: string, displayText: string) => {
     setBusy(true);
     if (!title) {
       const firstLine = (displayText || prompt).split("\n").find((l) => l.trim());
@@ -738,6 +780,8 @@ export function ChatView({
       } else if (ev.type === "session_id") {
         sessionRef.current = ev.session_id;
         setHasSession(true);
+      } else if (ev.type === "token_usage") {
+        accumulateTokens(ev);
       } else if (ev.type === "available_commands") {
         setAcpCommands(ev.commands);
       } else if (ev.type === "permission_request") {
@@ -791,6 +835,8 @@ export function ChatView({
         } else if (ev.type === "session_id") {
           sessionRef.current = ev.session_id;
           setHasSession(true);
+        } else if (ev.type === "token_usage") {
+          accumulateTokens(ev);
         } else if (ev.type === "available_commands") {
           setAcpCommands(ev.commands);
         }
@@ -824,6 +870,39 @@ export function ChatView({
     // The context preamble travelled with this turn — drop it so it doesn't
     // re-cling to subsequent prompts.
     setPendingContext(null);
+  };
+
+  const send = async () => {
+    const draftText = draft.trim();
+    if ((!draftText && attachments.length === 0) || busy) return;
+
+    // /<workflow> intercept: run inline instead of talking to the agent.
+    const wfCmd = tryParseWorkflowCommand(draftText, workflows);
+    if (wfCmd) {
+      await runWorkflowInline(wfCmd.wf, wfCmd.inputArg);
+      return;
+    }
+
+    if (!available.length) return;
+    // Build the prompt the agent sees: optional workflow-context preamble
+    // (consumed once), attached file refs, then the user's text.
+    const ctxBlock = pendingContext ? `${pendingContext}\n\n` : "";
+    const attachBlock =
+      attachments.length > 0
+        ? `Attached files:\n${attachments.map((p) => `- @${p}`).join("\n")}\n\n`
+        : "";
+    const prompt = ctxBlock + attachBlock + draftText;
+    // Display message keeps attachments visible as @-refs even when the user
+    // sent no prose — gives a record of what was shared.
+    const displayText =
+      attachments.length > 0 && !draftText
+        ? attachments.map((p) => `@${p}`).join(" ")
+        : draftText;
+
+    setDraft("");
+    setAttachments([]);
+    setPop(null);
+    await runAgentTurn(prompt, displayText);
   };
 
   const respondPerm = (optionId: string | null) => {
@@ -1000,6 +1079,22 @@ export function ChatView({
             <span className="tag is-run">
               <span className="tag__dot" />
               streaming
+            </span>
+          )}
+          {tokens && (
+            <span
+              className="tag is-toks"
+              title={
+                `Input: ${tokens.input_tokens.toLocaleString()}\n` +
+                `Output: ${tokens.output_tokens.toLocaleString()}\n` +
+                `Cache read: ${tokens.cache_read_input_tokens.toLocaleString()}\n` +
+                `Cache write: ${tokens.cache_creation_input_tokens.toLocaleString()}\n` +
+                `Turns: ${tokens.turns}` +
+                (tokens.cost_usd > 0 ? `\nEst. cost: $${tokens.cost_usd.toFixed(4)}` : "")
+              }
+            >
+              ↑{compactNumber(tokens.input_tokens)} ↓{compactNumber(tokens.output_tokens)}
+              {tokens.cost_usd > 0 && ` · ${formatCost(tokens.cost_usd)}`}
             </span>
           )}
           <select

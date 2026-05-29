@@ -71,9 +71,18 @@ export type LogEvent =
   | { type: "step_started"; step_id: string; title: string; agent: string; model: string | null; attempt: number }
   | { type: "stdout"; step_id: string; line: string }
   | { type: "session_id"; step_id: string; session_id: string }
+  | {
+      type: "token_usage";
+      step_id: string;
+      input_tokens: number;
+      output_tokens: number;
+      cache_creation_input_tokens: number;
+      cache_read_input_tokens: number;
+      cost_usd?: number;
+    }
   | { type: "available_commands"; step_id: string; commands: CommandInfo[] }
   | { type: "stderr"; step_id: string; line: string }
-  | { type: "step_finished"; step_id: string; exit_code: number; attempt: number }
+  | { type: "step_finished"; step_id: string; exit_code: number; attempt: number; final_text: string }
   | { type: "step_skipped"; step_id: string }
   | { type: "retrying"; step_id: string; attempt: number }
   | { type: "goto"; from: string; to: string }
@@ -110,6 +119,14 @@ export type CommandInfo = {
 
 /** Mirrors the Rust `chatstore::ChatSession` (serde snake_case). */
 export type ChatMessage = { role: "user" | "assistant"; text: string };
+export type TokenTotals = {
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_input_tokens: number;
+  cache_read_input_tokens: number;
+  cost_usd: number;
+  turns: number;
+};
 export type ChatSession = {
   session_id?: string;
   agent: string;
@@ -120,8 +137,14 @@ export type ChatSession = {
   conv_id?: string;
   transport?: "cli" | "acp";
   title?: string;
+  /** Staged workflow-result preamble awaiting the next send; persisted so it
+   *  survives reload. Mirrors Rust `pending_context`. */
+  pending_context?: string | null;
   updated_at?: number;
   created_at?: number;
+  /** Cumulative token usage; absent on legacy saves and on agents that don't
+   *  report usage (currently only claude stream-json does). */
+  tokens?: TokenTotals | null;
 };
 
 export type ChatSummary = {

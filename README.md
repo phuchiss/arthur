@@ -1,13 +1,15 @@
 # Arthur
 
-**A desktop workflow orchestrator for AI coding CLIs.** Define multi-step
-workflows ("playbooks") in Markdown and route each step to **Claude**, **Codex**,
-or **Gemini** — using the subscriptions you already pay for, not API keys.
+**A desktop "agents desk" for AI coding CLIs.** Open a project, then either
+**chat interactively** with **Claude**, **Codex**, or **Gemini**, or run a
+multi-step **workflow** ("playbook") that routes each step to the right agent —
+using the subscriptions you already pay for, not API keys.
 
-Arthur drives the official CLIs (`claude`, `codex`, `gemini`) in headless mode.
-It owns the **sequencing, model/agent routing, context passing, and human
-approval gates**; each CLI runs its own internal agentic loop inside the project
-directory you choose.
+Arthur drives the official CLIs (`claude`, `codex`, `gemini`). For chat it
+speaks **ACP** (Agent Client Protocol) over a long-lived subprocess where
+available, so streaming, tool-call updates, and permission prompts are live; for
+workflows it owns the **sequencing, model/agent routing, context passing, and
+human approval gates** across one-shot CLI invocations.
 
 Built with **Tauri v2** (Rust core) + **React/TypeScript**.
 
@@ -18,7 +20,8 @@ Built with **Tauri v2** (Rust core) + **React/TypeScript**.
 Different steps of real work want different tools: planning with one model,
 implementing with another, reviewing with a third. Arthur lets you express that
 as a repeatable playbook and run it with live, streamed feedback and approval
-checkpoints — instead of copy-pasting between terminals.
+checkpoints — or, in chat mode, just talk to one agent and let it work — instead
+of copy-pasting between terminals.
 
 Because it shells out to the official CLIs, every step uses that vendor's
 **subscription auth** (Claude Pro/Max, ChatGPT Plus/Pro for Codex, Google for
@@ -27,23 +30,29 @@ Gemini). Arthur stores no credentials of its own.
 ## How it works
 
 ```
-┌──────────────────────────────────────────────┐
-│  React UI — workflow list, live logs,          │
-│  per-step status, approval modal               │
-└───────────────┬────────────────────────────────┘
+┌──────────────────────────────────────────────────┐
+│  React UI                                          │
+│  • Sessions rail — persistent chat conversations   │
+│  • Workflows rail — project + global playbooks     │
+│  • ChatView · RunView · WorkflowEditor · Files     │
+└───────────────┬────────────────────────────────────┘
                 │  Tauri commands + Channel<LogEvent>
-┌───────────────▼────────────────────────────────┐
-│  Rust core                                       │
-│  • Playbook parser   (Markdown → Workflow)       │
-│  • Workflow engine   (seq / when / goto /        │
-│                       retry / approval / cancel) │
-│  • Context store     (working dir + artifacts    │
-│                       + step outputs + {{ }})    │
-│  • Agent adapters    (trait AgentAdapter)        │
-│       ├─ claude → claude -p …                    │
-│       ├─ codex  → codex exec …                   │
-│       └─ gemini → gemini -p …                    │
-└──────────────────────────────────────────────────┘
+┌───────────────▼────────────────────────────────────┐
+│  Rust core                                           │
+│  • Playbook parser   (Markdown → Workflow)           │
+│  • Workflow engine   (seq / when / goto /            │
+│                       retry / approval / cancel)     │
+│  • Chat store        (per-project persisted chats,   │
+│                       resume + token totals)         │
+│  • ACP client        (long-lived JSON-RPC over       │
+│                       stdio: streaming, tool calls,  │
+│                       permission callbacks)          │
+│  • Files (git)       (changed-files + preview/diff)  │
+│  • Agent adapters    (trait AgentAdapter)            │
+│       ├─ claude → claude -p / --acp                  │
+│       ├─ codex  → codex exec / experimental acp      │
+│       └─ gemini → gemini -p / --experimental-acp     │
+└──────────────────────────────────────────────────────┘
 ```
 
 ## Requirements
@@ -70,10 +79,38 @@ npm run tauri build    # produce a distributable bundle
 
 ## Usage
 
-1. **Open project** — pick a local repository.
-2. Select a **workflow** from the sidebar (project-local and global ones are merged).
-3. Fill in the workflow's **inputs** and click **Run workflow**.
-4. Watch **live logs** and per-step status; **approve/reject** at gates; **cancel** anytime.
+1. **Open project** — pick a local repository. Chat and workflow rails appear.
+2. **Chat** — start a new session from the sidebar, pick agent/model/mode/transport,
+   and type. Tool calls and thoughts render inline; permission prompts appear as
+   modals (in `ask` mode over ACP).
+3. **Workflows** — select a playbook, fill in **inputs**, click **Run workflow**.
+   Watch **live logs** and per-step status; **approve/reject** at gates; **cancel**
+   anytime. Output of a finished run can be piped into a chat as context for
+   follow-up questions.
+4. **Files panel** — alongside chat/run, browse the project tree, see what the
+   agent changed since the session started, preview diffs, and reset the baseline.
+
+## Chat mode
+
+A chat session is a persistent conversation with **one** agent against the open
+project. Sessions are stored under `<project>/.arthur/chats/<conv_id>.json` and
+listed in the left rail; deleting one wipes both the file and the live
+connection.
+
+Each session picks a **transport**:
+
+- **ACP** (Agent Client Protocol): a long-lived JSON-RPC connection over the
+  agent subprocess's stdio. Streams partial assistant text, tool calls, plan
+  updates, and permission requests. Required for the interactive `ask` mode and
+  for `exit_plan_mode` / `ask_user_question` dialogs. Available with
+  `claude --acp`, `codex experimental acp`, and
+  `gemini --experimental-acp` — check the agent dots in the header.
+- **CLI**: one-shot `-p` invocation per turn (the same path workflows use).
+  Lower fidelity (no live tool-call breakdown, `ask` falls back to default), but
+  works against any installed CLI version.
+
+The token-usage chip and cost estimate are populated only by Claude's
+stream-json transport today; other agents omit them.
 
 ## Playbook format
 
@@ -189,7 +226,9 @@ Playbooks are discovered from two places and merged (project wins on name clash)
 
 ## Bundled example workflows
 
-Found in [`.arthur/workflows/`](.arthur/workflows) (also installed to `~/.arthur/workflows`):
+Found in [`.arthur/sample-workflows/`](.arthur/sample-workflows) — copy any of
+these into `.arthur/workflows/` (project) or `~/.arthur/workflows/` (global) to
+have Arthur discover them:
 
 | Playbook | Input | Demonstrates |
 |----------|-------|--------------|
@@ -204,10 +243,16 @@ Found in [`.arthur/workflows/`](.arthur/workflows) (also installed to `~/.arthur
 src-tauri/src/
   engine/   model.rs · parser.rs · context.rs · expr.rs · executor.rs
   agents/   mod.rs (trait + registry + run_agent) · claude.rs · codex.rs · gemini.rs
+  acp/      long-lived JSON-RPC client (chat transport)
+  chatstore.rs   per-project chat persistence
+  files.rs       git-backed changed-files / preview / diff
   commands.rs · state.rs · runstore.rs · lib.rs
 src/
-  App.tsx · components/RunView.tsx · lib/ipc.ts
-.arthur/workflows/   example playbooks
+  App.tsx
+  components/   ChatView · RunView · WorkflowEditor · FilesPanel ·
+                AskUserDialog · ExitPlanDialog · Icon
+  lib/ipc.ts
+.arthur/sample-workflows/   bundled example playbooks (copy into workflows/)
 ```
 
 ## Development
@@ -220,11 +265,13 @@ npm run build                                       # typecheck + build frontend
 
 ## Known limitations / roadmap
 
-- **Live streaming for `claude`/`gemini`:** in plain text (`-p`) mode these CLIs
-  buffer stdout when piped, so the UI shows no output until the step ends — and
-  the process may not exit cleanly. Planned fix: switch to
-  `--output-format stream-json` and parse the event stream (top priority).
-- No structured parsing of tool calls / token cost yet.
-- No visual playbook builder — playbooks are hand-written Markdown.
+- **Workflow CLI transport still buffers:** chat already streams via ACP /
+  stream-json, but workflow steps invoke the CLIs in plain `-p` mode, so a step
+  may appear silent until it finishes. Planned: extend the engine to use the
+  same streaming transports as chat.
+- **Token totals are Claude-only** — the chip is hidden for codex/gemini until
+  they expose usage metadata.
+- No visual playbook builder — playbooks are hand-written Markdown (the
+  in-app editor with "Improve" assist is the closest thing today).
 - Runs are persisted to the app data dir, but there is no history UI yet.
 - Tested on macOS; Linux/Windows are likely but unverified.

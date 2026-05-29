@@ -549,6 +549,7 @@ input, textarea, select {
 .tag.is-ok   .tag__dot { background: var(--ok); }
 .tag.is-err  .tag__dot { background: var(--err); }
 .tag.is-warn .tag__dot { background: var(--warn); }
+.tag.is-toks { font-variant-numeric: tabular-nums; cursor: default; }
 
 /* Select that looks consistent with our toolbar */
 .field-select {

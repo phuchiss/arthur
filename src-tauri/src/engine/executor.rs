@@ -184,6 +184,7 @@ pub async fn run_workflow(
                     step_id: step.id.clone(),
                     exit_code: result.exit_code,
                     attempt,
+                    final_text: result.final_text.clone(),
                 });
 
                 match &step.config.retry {

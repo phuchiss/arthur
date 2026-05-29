@@ -177,6 +177,16 @@ pub async fn run_agent(
                     if let Some(r) = event.result {
                         captured = r;
                     }
+                    if let Some(u) = event.usage {
+                        out_sink.emit(LogEvent::TokenUsage {
+                            step_id: out_sid.clone(),
+                            input_tokens: u.input_tokens,
+                            output_tokens: u.output_tokens,
+                            cache_creation_input_tokens: u.cache_creation_input_tokens,
+                            cache_read_input_tokens: u.cache_read_input_tokens,
+                            cost_usd: u.cost_usd,
+                        });
+                    }
                 }
             }
         }
@@ -222,6 +232,16 @@ pub async fn run_agent(
     })
 }
 
+/// Per-turn token usage extracted from claude's `result` event.
+#[derive(Default, Clone, Copy, PartialEq, Debug)]
+struct UsageData {
+    input_tokens: u64,
+    output_tokens: u64,
+    cache_creation_input_tokens: u64,
+    cache_read_input_tokens: u64,
+    cost_usd: Option<f64>,
+}
+
 /// One parsed claude stream-json event.
 #[derive(Default)]
 struct ClaudeEvent {
@@ -231,6 +251,8 @@ struct ClaudeEvent {
     result: Option<String>,
     /// Session id (present on `init`/`result` events), for `--resume`.
     session_id: Option<String>,
+    /// Cumulative token usage for the turn (present on `result`).
+    usage: Option<UsageData>,
 }
 
 /// Parse one line of claude's `--output-format stream-json` output.
@@ -284,16 +306,44 @@ fn parse_claude_stream_line(line: &str) -> ClaudeEvent {
                 .get("result")
                 .and_then(|r| r.as_str())
                 .map(|s| s.to_string());
+            let usage = value.get("usage").map(|u| UsageData {
+                input_tokens: u.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
+                output_tokens: u.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
+                cache_creation_input_tokens: u
+                    .get("cache_creation_input_tokens")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0),
+                cache_read_input_tokens: u
+                    .get("cache_read_input_tokens")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0),
+                cost_usd: value.get("total_cost_usd").and_then(|v| v.as_f64()),
+            });
             ClaudeEvent {
                 result,
+                session_id,
+                usage,
+                ..Default::default()
+            }
+        }
+        // The `system/init` announcement carries the canonical conversation id
+        // (the same one claude appends turns to and that `--resume` accepts).
+        Some("system")
+            if value.get("subtype").and_then(|s| s.as_str()) == Some("init") =>
+        {
+            ClaudeEvent {
                 session_id,
                 ..Default::default()
             }
         }
-        _ => ClaudeEvent {
-            session_id,
-            ..Default::default()
-        },
+        // Every other event — notably the `system/hook_started` / `hook_response`
+        // lines emitted when the user has Claude Code hooks configured — carries
+        // an EPHEMERAL session id. These arrive *before* `init` on a resumed
+        // turn, so capturing the first id we see would save the hook's throwaway
+        // id; the next turn then `--resume`s a phantom session and silently loses
+        // all context. Drop the id here and let `init`/`result`/`assistant`
+        // supply the real one.
+        _ => ClaudeEvent::default(),
     }
 }
 
@@ -313,4 +363,77 @@ fn summarize_tool_input(input: Option<&serde_json::Value>) -> String {
         }
     }
     String::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Mirrors the capture loop in `run_agent`: it saves the first session id it
+    /// sees in the stream. This returns whatever id that loop would persist.
+    fn captured_session_id(lines: &[&str]) -> Option<String> {
+        lines
+            .iter()
+            .find_map(|line| parse_claude_stream_line(line).session_id)
+    }
+
+    #[test]
+    fn hook_events_do_not_leak_session_id() {
+        // `hook_started` / `hook_response` carry an ephemeral id (present when the
+        // user has Claude Code hooks configured) — it must never be captured.
+        let started = r#"{"type":"system","subtype":"hook_started","session_id":"ephemeral-hook-id"}"#;
+        let response = r#"{"type":"system","subtype":"hook_response","session_id":"ephemeral-hook-id"}"#;
+        assert_eq!(parse_claude_stream_line(started).session_id, None);
+        assert_eq!(parse_claude_stream_line(response).session_id, None);
+    }
+
+    #[test]
+    fn init_event_supplies_canonical_session_id() {
+        let init = r#"{"type":"system","subtype":"init","session_id":"canonical-id"}"#;
+        assert_eq!(
+            parse_claude_stream_line(init).session_id.as_deref(),
+            Some("canonical-id")
+        );
+    }
+
+    #[test]
+    fn resumed_turn_captures_init_id_not_hook_id() {
+        // On a resumed turn the hook lines arrive *before* init. The id we save
+        // (and feed to the next `--resume`) must be the canonical init id, or
+        // the next turn resumes a phantom session and loses all context.
+        let stream = [
+            r#"{"type":"system","subtype":"hook_started","session_id":"ephemeral-hook-id"}"#,
+            r#"{"type":"system","subtype":"hook_response","session_id":"ephemeral-hook-id"}"#,
+            r#"{"type":"system","subtype":"init","session_id":"canonical-id"}"#,
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]},"session_id":"canonical-id"}"#,
+            r#"{"type":"result","result":"done","session_id":"canonical-id"}"#,
+        ];
+        assert_eq!(captured_session_id(&stream).as_deref(), Some("canonical-id"));
+    }
+
+    #[test]
+    fn result_event_carries_id_and_text() {
+        let result = r#"{"type":"result","result":"final","session_id":"canonical-id"}"#;
+        let ev = parse_claude_stream_line(result);
+        assert_eq!(ev.session_id.as_deref(), Some("canonical-id"));
+        assert_eq!(ev.result.as_deref(), Some("final"));
+    }
+
+    #[test]
+    fn result_event_extracts_token_usage() {
+        let result = r#"{"type":"result","result":"ok","session_id":"sid","total_cost_usd":0.0123,"usage":{"input_tokens":120,"output_tokens":45,"cache_creation_input_tokens":10,"cache_read_input_tokens":900}}"#;
+        let ev = parse_claude_stream_line(result);
+        let u = ev.usage.expect("usage present on result");
+        assert_eq!(u.input_tokens, 120);
+        assert_eq!(u.output_tokens, 45);
+        assert_eq!(u.cache_creation_input_tokens, 10);
+        assert_eq!(u.cache_read_input_tokens, 900);
+        assert!((u.cost_usd.unwrap() - 0.0123).abs() < 1e-9);
+    }
+
+    #[test]
+    fn result_event_without_usage_block() {
+        let result = r#"{"type":"result","result":"ok","session_id":"sid"}"#;
+        assert!(parse_claude_stream_line(result).usage.is_none());
+    }
 }

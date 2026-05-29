@@ -32,7 +32,7 @@ const NEW_TEMPLATE = [
 ].join("\n");
 
 type View =
-  | { kind: "chat"; convId?: string; nonce: number }
+  | { kind: "chat"; convId?: string; nonce: number; fresh?: boolean }
   | { kind: "workflow"; path: string }
   | { kind: "editor"; target: EditorTarget; content: string }
   | { kind: "run"; workflow: Workflow; inputs: Record<string, string>; key: number }
@@ -145,7 +145,9 @@ export default function App() {
   const newChat = () => {
     setError(null);
     // nonce forces ChatView remount with no convId — a fresh session.
-    setView({ kind: "chat", nonce: Date.now() });
+    // `fresh` tells ChatView to start blank instead of restoring the most
+    // recent chat (which is what an undefined convId means on boot).
+    setView({ kind: "chat", nonce: Date.now(), fresh: true });
   };
 
   const deleteSession = async (convId: string) => {
@@ -380,6 +382,7 @@ export default function App() {
             agents={agents}
             workflows={workflows}
             convId={view.convId}
+            fresh={view.fresh}
             onSessionsChanged={() => refreshSessions(project)}
           />
         ) : view.kind === "editor" ? (

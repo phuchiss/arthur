@@ -1,14 +1,22 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// How much autonomy a step's agent is granted. Maps to per-CLI permission flags.
+/// Permission mode a step's agent runs under. Maps to per-CLI permission flags
+/// (in `agents/`) and to the ACP `session/request_permission` auto-answer
+/// (in `acp/`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Autonomy {
-    Read,
+#[serde(rename_all = "snake_case")]
+pub enum Mode {
+    /// Interactive: each permission request is surfaced to the user (ACP only;
+    /// CLI agents fall back to AcceptEdits since `-p` has no TTY).
+    Ask,
+    /// Auto-allow edits once per request (no interruption, no destructive ops).
     #[default]
-    Edit,
-    Full,
+    AcceptEdits,
+    /// Planning only — no execution, no edits.
+    Plan,
+    /// Auto-allow everything (`allow_always` / `bypassPermissions` / `yolo`).
+    Auto,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,7 +31,7 @@ pub struct Retry {
 pub struct StepConfig {
     pub agent: Option<String>,
     pub model: Option<String>,
-    pub autonomy: Option<Autonomy>,
+    pub mode: Option<Mode>,
     /// Name to store this step's result under in `artifacts`.
     pub output: Option<String>,
     #[serde(default)]
@@ -47,7 +55,7 @@ pub struct Step {
 pub struct Defaults {
     pub agent: Option<String>,
     pub model: Option<String>,
-    pub autonomy: Option<Autonomy>,
+    pub mode: Option<Mode>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,7 +75,7 @@ pub struct Workflow {
 pub struct AgentInvocation {
     pub agent: String,
     pub model: Option<String>,
-    pub autonomy: Autonomy,
+    pub mode: Mode,
     pub prompt: String,
     pub working_dir: PathBuf,
     pub step_id: String,

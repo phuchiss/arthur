@@ -1,3 +1,4 @@
+mod acp;
 mod agents;
 mod chatstore;
 mod commands;
@@ -46,8 +47,14 @@ pub fn run() {
             commands::cancel_improve,
             commands::start_chat,
             commands::cancel_chat,
+            commands::close_chat,
+            commands::respond_permission,
+            commands::list_chats,
             commands::load_chat,
             commands::save_chat,
+            commands::delete_chat,
+            commands::list_project_files,
+            commands::list_slash_commands,
             commands::start_run,
             commands::approve,
             commands::cancel,

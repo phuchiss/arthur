@@ -78,8 +78,11 @@ a `CaptureKind`; the shared async streaming/cancellation loop lives once in
 `--output-last-message`, for clean final-message capture).
 
 **To add an agent:** create `agents/<name>.rs` implementing `AgentAdapter`, then
-register it in `AgentRegistry::new()`. The autonomy → CLI-flag mapping
-(`Read`/`Edit`/`Full`) is per-adapter in `build()`.
+register it in `AgentRegistry::new()`. The mode → CLI-flag mapping
+(`Ask` / `AcceptEdits` / `Plan` / `Auto`) is per-adapter in `build()`. For
+ACP, `acp::pick_permission` auto-answers for AcceptEdits/Plan/Auto, while Ask
+emits a `PermissionRequest` event the UI must reply to via the
+`respond_permission` Tauri command.
 
 ### Parser & templating (`engine/parser.rs`, `context.rs`, `expr.rs`)
 

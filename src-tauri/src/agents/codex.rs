@@ -1,5 +1,5 @@
 use super::{resolve_bin, AgentAdapter, Availability, BuiltCommand, CaptureKind, StreamFormat};
-use crate::engine::model::{AgentInvocation, Autonomy};
+use crate::engine::model::{AgentInvocation, Mode};
 use tokio::process::Command;
 
 pub struct Codex;
@@ -12,10 +12,12 @@ impl AgentAdapter for Codex {
     fn build(&self, inv: &AgentInvocation) -> BuiltCommand {
         let mut command = Command::new(resolve_bin("codex"));
         command.arg("exec");
-        let sandbox = match inv.autonomy {
-            Autonomy::Read => "read-only",
-            Autonomy::Edit => "workspace-write",
-            Autonomy::Full => "danger-full-access",
+        // `codex exec` runs non-interactively, so Ask behaves the same as
+        // AcceptEdits — allow workspace writes, but no destructive shell access.
+        let sandbox = match inv.mode {
+            Mode::Plan => "read-only",
+            Mode::Ask | Mode::AcceptEdits => "workspace-write",
+            Mode::Auto => "danger-full-access",
         };
         command.arg("-s").arg(sandbox);
         command.arg("--skip-git-repo-check");

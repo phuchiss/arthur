@@ -1,5 +1,5 @@
 use super::context::{RunContext, StepResult};
-use super::model::{AgentInvocation, AgentResult, Autonomy, Workflow};
+use super::model::{AgentInvocation, AgentResult, Mode, Workflow};
 use super::{expr, Decision, EventSink, LogEvent};
 use std::collections::HashMap;
 use std::future::Future;
@@ -116,7 +116,7 @@ pub async fn run_workflow(
         // Run an agent only when the step has a prompt. A step with an empty
         // body is a control/gate step (approval and/or goto only).
         if !step.prompt.trim().is_empty() {
-            // Resolve agent / model / autonomy with workflow defaults.
+            // Resolve agent / model / mode with workflow defaults.
             let agent = step
                 .config
                 .agent
@@ -124,11 +124,11 @@ pub async fn run_workflow(
                 .or_else(|| workflow.defaults.agent.clone())
                 .unwrap_or_else(|| "claude".to_string());
             let model = step.config.model.clone().or_else(|| workflow.defaults.model.clone());
-            let autonomy = step
+            let mode = step
                 .config
-                .autonomy
-                .or(workflow.defaults.autonomy)
-                .unwrap_or(Autonomy::Edit);
+                .mode
+                .or(workflow.defaults.mode)
+                .unwrap_or(Mode::AcceptEdits);
 
             // Run the step, retrying while `until` is false (up to `max`).
             let max_attempts = step.config.retry.as_ref().map(|r| r.max.max(1)).unwrap_or(1);
@@ -151,7 +151,7 @@ pub async fn run_workflow(
                 let invocation = AgentInvocation {
                     agent: agent.clone(),
                     model: model.clone(),
-                    autonomy,
+                    mode,
                     prompt,
                     working_dir: working_dir.clone(),
                     step_id: step.id.clone(),

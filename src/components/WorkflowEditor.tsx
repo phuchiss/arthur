@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, Availability, Step, Workflow } from "../lib/ipc";
+import { Icon } from "./Icon";
 
 const AGENTS = ["claude", "codex", "gemini"];
 
@@ -39,7 +40,6 @@ export function WorkflowEditor({
   const [improveNote, setImproveNote] = useState<string | null>(null);
   const [revertTo, setRevertTo] = useState<string | null>(null);
 
-  // Debounced live preview: re-parse via the Rust parser as the user types.
   useEffect(() => {
     if (!showPreview) return;
     const path = target.mode === "edit" ? target.path : undefined;
@@ -58,7 +58,6 @@ export function WorkflowEditor({
     return () => clearTimeout(handle);
   }, [content, showPreview, target]);
 
-  // Keep the selected agent in sync if availability resolves after mount.
   useEffect(() => {
     if (availableAgents.length && !availableAgents.includes(improveAgent)) {
       setImproveAgent(availableAgents[0]);
@@ -71,8 +70,6 @@ export function WorkflowEditor({
     setDirty(true);
   };
 
-  // Tab inserts two spaces (YAML in the ```step blocks is space-indented).
-  // execCommand keeps the textarea's native undo stack intact.
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Tab") {
       e.preventDefault();
@@ -154,52 +151,54 @@ export function WorkflowEditor({
   };
 
   return (
-    <div className="editor">
-      <div className="editor-head">
-        <button className="link" onClick={close}>
-          ← back
+    <div className="main">
+      <div className="main__head">
+        <button className="icon-btn" title="Back" onClick={close}>
+          <Icon name="back" size={13} />
         </button>
-        {target.mode === "new" ? (
-          <>
+        <div className="main__title">
+          <Icon name="edit" size={12} />
+          {target.mode === "new" ? (
             <input
-              className="editor-name"
+              className="editor__name"
               value={name}
               placeholder="file-name"
               onChange={(e) => setName(e.target.value)}
             />
+          ) : (
+            <span className="main__title-text" title={target.path}>
+              {fileName(target.path)}
+            </span>
+          )}
+        </div>
+        <div className="main__head-right">
+          {target.mode === "new" && (
             <select
-              className="editor-scope"
+              className="field-select"
               value={scope}
               onChange={(e) => setScope(e.target.value as "project" | "global")}
             >
               <option value="project">project</option>
               <option value="global">global</option>
             </select>
-          </>
-        ) : (
-          <span className="editor-path" title={target.path}>
-            {fileName(target.path)}
-          </span>
-        )}
-        <div className="editor-actions">
-          <label className="editor-toggle">
-            <input
-              type="checkbox"
-              checked={showPreview}
-              onChange={(e) => setShowPreview(e.target.checked)}
-            />
+          )}
+          <button
+            className={`btn-ghost ${showPreview ? "is-active" : ""}`}
+            onClick={() => setShowPreview((s) => !s)}
+            title="Toggle preview"
+          >
             preview
-          </label>
-          <button className="primary" disabled={!canSave} onClick={save}>
+          </button>
+          <button className="btn-primary" disabled={!canSave} onClick={save}>
             {saving ? "Saving…" : target.mode === "new" ? "Create" : "Save"}
           </button>
         </div>
       </div>
 
-      <div className="editor-ai">
-        <span className="editor-ai-label">✨ Improve with</span>
+      <div className="editor__ai">
+        <span className="editor__ai-label">✨ Improve with</span>
         <select
-          className="editor-scope"
+          className="field-select"
           value={improveAgent}
           disabled={improving || availableAgents.length === 0}
           onChange={(e) => setImproveAgent(e.target.value)}
@@ -211,7 +210,7 @@ export function WorkflowEditor({
           ))}
         </select>
         <input
-          className="editor-instruction"
+          className="editor__instruction"
           value={instruction}
           placeholder="Optional: what to focus on…"
           disabled={improving}
@@ -221,12 +220,12 @@ export function WorkflowEditor({
           }}
         />
         {improving ? (
-          <button className="danger" onClick={cancelImprove}>
+          <button className="btn-danger" onClick={cancelImprove}>
             Cancel
           </button>
         ) : (
           <button
-            className="ghost"
+            className="btn-ghost"
             disabled={availableAgents.length === 0 || content.trim().length === 0}
             title={availableAgents.length === 0 ? "No CLIs detected on PATH" : undefined}
             onClick={improve}
@@ -234,21 +233,21 @@ export function WorkflowEditor({
             Improve
           </button>
         )}
-        {improving && <span className="editor-ai-status">running {improveAgent}…</span>}
+        {improving && <span className="editor__ai-status">running {improveAgent}…</span>}
         {!improving && revertTo !== null && (
-          <button className="link" onClick={revert}>
-            ↩ revert
+          <button className="icon-btn" title="Revert" onClick={revert}>
+            <Icon name="back" size={12} />
           </button>
         )}
-        {!improving && improveNote && <span className="editor-ai-note">{improveNote}</span>}
+        {!improving && improveNote && <span className="editor__ai-note">{improveNote}</span>}
       </div>
 
       {improveError && <div className="error-bar">{improveError}</div>}
       {saveError && <div className="error-bar">{saveError}</div>}
 
-      <div className={`editor-body ${showPreview ? "" : "no-preview"}`}>
+      <div className={`editor__body ${showPreview ? "" : "no-preview"}`}>
         <textarea
-          className="editor-text"
+          className="editor__text"
           value={content}
           spellCheck={false}
           readOnly={improving}
@@ -256,26 +255,27 @@ export function WorkflowEditor({
           onKeyDown={onKeyDown}
         />
         {showPreview && (
-          <div className="editor-preview">
+          <div className="editor__preview">
             {previewError ? (
-              <div className="preview-error">{previewError}</div>
+              <div className="editor__preview-error">{previewError}</div>
             ) : preview ? (
               <>
                 <h3>{preview.name}</h3>
                 {preview.inputs.length > 0 && (
-                  <div className="preview-inputs">
+                  <div className="editor__preview-inputs">
                     {preview.inputs.map((i) => (
                       <span key={i} className="chip">
+                        <span className="chip__dot" />
                         {i}
                       </span>
                     ))}
                   </div>
                 )}
-                <ol className="steps preview">
+                <ol className="detail__steps">
                   {preview.steps.map((s) => (
-                    <li key={s.id} className="step">
-                      <span className="step-title">{s.title}</span>
-                      <span className="step-meta">{stepMeta(s, preview)}</span>
+                    <li key={s.id} className="detail__step">
+                      <span className="title">{s.title}</span>
+                      <span className="meta">{stepMeta(s, preview)}</span>
                     </li>
                   ))}
                 </ol>
@@ -294,6 +294,7 @@ function stepMeta(s: Step, wf: Workflow): string {
   return [
     s.config.agent ?? wf.defaults.agent,
     s.config.model,
+    s.config.mode ?? wf.defaults.mode,
     s.config.approval ? "approval" : null,
     s.config.retry ? `retry×${s.config.retry.max}` : null,
     s.config.when ? "when" : null,

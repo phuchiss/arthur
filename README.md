@@ -85,14 +85,14 @@ A workflow is one Markdown file. YAML frontmatter holds workflow metadata; each
 ---
 name: Add Feature
 inputs: [feature_description]
-defaults: { agent: claude, autonomy: edit }
+defaults: { agent: claude, mode: accept_edits }
 ---
 
 ## plan
 ```step
 agent: claude
 model: opus
-autonomy: edit
+mode: accept_edits
 output: plan
 ```
 Plan this feature: {{ inputs.feature_description }}
@@ -107,7 +107,7 @@ approval: true
 ```step
 agent: codex
 model: gpt-5-codex
-autonomy: full
+mode: auto
 ```
 Implement the plan in PLAN.md.
 
@@ -115,7 +115,7 @@ Implement the plan in PLAN.md.
 ```step
 agent: claude
 model: sonnet
-autonomy: full
+mode: auto
 retry: { max: 3, until: "exit_code == 0" }
 ```
 Run the tests. If they fail, fix the code and run again.
@@ -129,7 +129,7 @@ goto: implement
 ## pr
 ```step
 agent: claude
-autonomy: full
+mode: auto
 approval: true
 ```
 Commit and open a PR with `gh pr create`.
@@ -141,7 +141,7 @@ Commit and open a PR with `gh pr create`.
 |-----|---------|
 | `agent` | `claude` \| `codex` \| `gemini` (falls back to `defaults.agent`) |
 | `model` | model alias/name passed to the CLI (e.g. `opus`, `sonnet`, `gpt-5-codex`) |
-| `autonomy` | `read` \| `edit` \| `full` — how much the agent may do |
+| `mode` | `ask` \| `accept_edits` \| `plan` \| `auto` — permission policy |
 | `output` | name to store this step's result text under `artifacts` |
 | `approval` | `true` → pause for human Approve/Reject before continuing |
 | `when` | boolean expression; the step is skipped unless it is true |
@@ -163,17 +163,22 @@ Available inside prompts and `when`/`until` expressions:
 In `retry.until`, the bare variables `exit_code` and `attempts` are also available
 (e.g. `until: "exit_code == 0 || attempts >= 3"`).
 
-### Autonomy → CLI flags
+### Mode → CLI flags
 
-| Autonomy | claude | codex | gemini |
-|----------|--------|-------|--------|
-| `read` | `--permission-mode plan` | `-s read-only` | `--approval-mode plan` |
-| `edit` | `--permission-mode acceptEdits` | `-s workspace-write` | `--approval-mode auto_edit` |
-| `full` | `--permission-mode bypassPermissions` | `-s danger-full-access` | `--approval-mode yolo` |
+| Mode | claude | codex | gemini |
+|------|--------|-------|--------|
+| `ask` | `--permission-mode default` | `-s workspace-write` | `--approval-mode default` |
+| `accept_edits` | `--permission-mode acceptEdits` | `-s workspace-write` | `--approval-mode auto_edit` |
+| `plan` | `--permission-mode plan` | `-s read-only` | `--approval-mode plan` |
+| `auto` | `--permission-mode bypassPermissions` | `-s danger-full-access` | `--approval-mode yolo` |
 
-> Steps that run shell commands (tests, `git`, `gh`) generally need `full`,
-> because in headless mode `edit`/`acceptEdits` only auto-approves file edits,
-> not arbitrary commands.
+> `ask` is fully interactive only over the **ACP** transport — Arthur surfaces
+> each tool request as a modal. With the CLI transport (`-p` one-shot), agents
+> have no TTY, so `ask` falls back to the safer default mode and Codex behaves
+> like `accept_edits`.
+>
+> Steps that run shell commands (tests, `git`, `gh`) generally need `auto`,
+> because `accept_edits` only auto-approves file edits, not arbitrary commands.
 
 ## Workflow locations
 
@@ -189,7 +194,7 @@ Found in [`.arthur/workflows/`](.arthur/workflows) (also installed to `~/.arthur
 | Playbook | Input | Demonstrates |
 |----------|-------|--------------|
 | `add-feature` | `feature_description` | full control flow: approval + retry loop + branch |
-| `create-github-issue` | `issue_summary` | autonomy `read`→`full`, artifact passing, `gh issue create` |
+| `create-github-issue` | `issue_summary` | mode `plan`→`auto`, artifact passing, `gh issue create` |
 | `fix-bug` | `bug_report` | reproduce → fix → verify (retry) → branch → PR |
 | `multi-agent-review` | `scope` | routing to claude **and** gemini, then synthesizing |
 

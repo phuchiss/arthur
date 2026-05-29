@@ -164,19 +164,19 @@ fn slugify(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::model::Autonomy;
+    use crate::engine::model::Mode;
 
     const SAMPLE: &str = r#"---
 name: Add Feature
 inputs: [feature_description]
-defaults: { agent: claude, autonomy: edit }
+defaults: { agent: claude, mode: accept_edits }
 ---
 
 ## plan
 ```step
 agent: claude
 model: opus
-autonomy: edit
+mode: accept_edits
 output: plan
 ```
 Plan this feature: {{ inputs.feature_description }}
@@ -189,7 +189,7 @@ approval: true
 ## test
 ```step
 agent: claude
-autonomy: full
+mode: auto
 retry: { max: 3, until: "exit_code == 0" }
 ```
 Run the tests.
@@ -213,14 +213,14 @@ goto: test
         assert_eq!(plan.id, "plan");
         assert_eq!(plan.config.agent.as_deref(), Some("claude"));
         assert_eq!(plan.config.model.as_deref(), Some("opus"));
-        assert_eq!(plan.config.autonomy, Some(Autonomy::Edit));
+        assert_eq!(plan.config.mode, Some(Mode::AcceptEdits));
         assert_eq!(plan.config.output.as_deref(), Some("plan"));
         assert!(plan.prompt.contains("Plan this feature: {{ inputs.feature_description }}"));
 
         assert!(wf.steps[1].config.approval);
 
         let test = &wf.steps[2];
-        assert_eq!(test.config.autonomy, Some(Autonomy::Full));
+        assert_eq!(test.config.mode, Some(Mode::Auto));
         let retry = test.config.retry.as_ref().unwrap();
         assert_eq!(retry.max, 3);
         assert_eq!(retry.until, "exit_code == 0");

@@ -1,5 +1,5 @@
 use super::{resolve_bin, AgentAdapter, Availability, BuiltCommand, CaptureKind, StreamFormat};
-use crate::engine::model::{AgentInvocation, Autonomy};
+use crate::engine::model::{AgentInvocation, Mode};
 use tokio::process::Command;
 
 pub struct Gemini;
@@ -15,10 +15,11 @@ impl AgentAdapter for Gemini {
         if let Some(model) = &inv.model {
             command.arg("-m").arg(model);
         }
-        let mode = match inv.autonomy {
-            Autonomy::Read => "plan",
-            Autonomy::Edit => "auto_edit",
-            Autonomy::Full => "yolo",
+        let mode = match inv.mode {
+            Mode::Ask => "default",
+            Mode::AcceptEdits => "auto_edit",
+            Mode::Plan => "plan",
+            Mode::Auto => "yolo",
         };
         command.arg("--approval-mode").arg(mode);
         command.current_dir(&inv.working_dir);

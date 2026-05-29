@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { api, Channel, LogEvent, Workflow } from "../lib/ipc";
+import { Icon } from "./Icon";
 
 type Status = "pending" | "running" | "done" | "failed" | "skipped" | "awaiting";
 type StepState = { status: Status; exit?: number; agent?: string; attempt?: number };
 type LogLine = { kind: "out" | "err" | "info"; stepId?: string; text: string };
 
-const STATUS_LABEL: Record<Status, string> = {
+const STATUS_BADGE: Record<Status, string> = {
   pending: "·",
   running: "▶",
   done: "✓",
@@ -14,9 +15,17 @@ const STATUS_LABEL: Record<Status, string> = {
   awaiting: "⏸",
 };
 
+const STATUS_TAG: Record<string, { label: string; kind: "ok" | "err" | "warn" | "run" | "" }> = {
+  done: { label: "done", kind: "ok" },
+  error: { label: "errored", kind: "err" },
+  rejected: { label: "rejected", kind: "err" },
+  cancelled: { label: "cancelled", kind: "" },
+  active: { label: "running…", kind: "run" },
+};
+
 export function RunView({
   workflow,
-  projectDir,
+  projectDir: _projectDir,
   inputs,
   onBack,
 }: {
@@ -47,7 +56,7 @@ export function RunView({
   };
 
   useEffect(() => {
-    if (started.current) return; // guard StrictMode double-mount
+    if (started.current) return;
     started.current = true;
 
     const channel = new Channel<LogEvent>();
@@ -117,7 +126,7 @@ export function RunView({
     };
 
     api
-      .startRun({ workflowPath: workflow.path ?? "", projectDir, inputs }, channel)
+      .startRun({ workflowPath: workflow.path ?? "", projectDir: _projectDir, inputs }, channel)
       .then((id) => {
         setRunId(id);
         runIdRef.current = id;
@@ -144,30 +153,40 @@ export function RunView({
     setAwaiting(null);
   };
 
+  const statusTag = STATUS_TAG[finished ?? "active"];
+
   return (
-    <div className="run">
-      <div className="run-header">
-        <button className="link" onClick={onBack}>
-          ← back
+    <div className="main">
+      <div className="main__head">
+        <button className="icon-btn" title="Back" onClick={onBack}>
+          <Icon name="back" size={13} />
         </button>
-        <span className="run-title">{workflow.name}</span>
-        <span className={`run-status ${finished ?? "active"}`}>{finished ?? "running…"}</span>
-        {!finished && runId && (
-          <button className="danger" onClick={() => api.cancel(runId).catch(() => {})}>
-            Cancel
-          </button>
-        )}
+        <div className="main__title">
+          <Icon name="play-step" size={12} />
+          <span className="main__title-text">{workflow.name}</span>
+        </div>
+        <div className="main__head-right">
+          <span className={`tag ${statusTag.kind ? `is-${statusTag.kind}` : ""}`}>
+            <span className="tag__dot" />
+            {statusTag.label}
+          </span>
+          {!finished && runId && (
+            <button className="btn-danger" onClick={() => api.cancel(runId).catch(() => {})}>
+              <Icon name="x" size={11} /> Cancel
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="run-body">
-        <ol className="steps">
+        <ol className="run-steps">
           {workflow.steps.map((s) => {
             const st = steps[s.id];
             return (
-              <li key={s.id} className={`step ${st.status}`}>
-                <span className="step-badge">{STATUS_LABEL[st.status]}</span>
-                <span className="step-title">{s.title}</span>
-                <span className="step-meta">
+              <li key={s.id} className={`run-step ${st.status}`}>
+                <span className="run-step__badge">{STATUS_BADGE[st.status]}</span>
+                <span className="run-step__title">{s.title}</span>
+                <span className="run-step__meta">
                   {st.agent ?? s.config.agent ?? workflow.defaults.agent ?? ""}
                   {st.exit !== undefined ? ` · exit ${st.exit}` : ""}
                 </span>
@@ -191,13 +210,14 @@ export function RunView({
           <div className="modal">
             <h3>Approval required</h3>
             <p>
-              Step <strong>{awaiting.title}</strong> is waiting. Approve to continue or reject to stop the run.
+              Step <strong>{awaiting.title}</strong> is waiting. Approve to continue or reject to
+              stop the run.
             </p>
             <div className="modal-actions">
-              <button className="danger" onClick={() => decide("reject")}>
+              <button className="btn-danger" onClick={() => decide("reject")}>
                 Reject
               </button>
-              <button className="primary" onClick={() => decide("approve")}>
+              <button className="btn-primary" onClick={() => decide("approve")}>
                 Approve
               </button>
             </div>

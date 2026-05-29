@@ -1,3 +1,4 @@
+use crate::acp::AcpConn;
 use crate::agents::AgentRegistry;
 use crate::engine::Decision;
 use std::collections::HashMap;
@@ -19,6 +20,9 @@ pub struct AppState {
     pub improves: Arc<Mutex<HashMap<Uuid, CancellationToken>>>,
     /// Cancellation handles for in-flight `start_chat` agent calls.
     pub chats: Arc<Mutex<HashMap<Uuid, CancellationToken>>>,
+    /// Long-lived ACP connections, keyed by conversation id and reused across
+    /// turns so the agent keeps context. Killed on new-session / close.
+    pub acp_conns: Arc<Mutex<HashMap<Uuid, Arc<AcpConn>>>>,
 }
 
 impl AppState {
@@ -28,6 +32,7 @@ impl AppState {
             runs: Arc::new(Mutex::new(HashMap::new())),
             improves: Arc::new(Mutex::new(HashMap::new())),
             chats: Arc::new(Mutex::new(HashMap::new())),
+            acp_conns: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }

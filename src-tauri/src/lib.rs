@@ -3,6 +3,7 @@ mod agents;
 mod chatstore;
 mod commands;
 mod engine;
+mod files;
 mod runstore;
 mod state;
 
@@ -58,6 +59,11 @@ pub fn run() {
             commands::start_run,
             commands::approve,
             commands::cancel,
+            commands::list_changed_files,
+            commands::list_all_files,
+            commands::read_file_preview,
+            commands::diff_file,
+            commands::reset_files_baseline,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

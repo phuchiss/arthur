@@ -18,6 +18,7 @@ import {
 import { Icon } from "./Icon";
 import { AskUserDialog } from "./AskUserDialog";
 import { ExitPlanDialog } from "./ExitPlanDialog";
+import { FilesPanel } from "./FilesPanel";
 
 const AGENTS = ["claude", "codex", "gemini"];
 const MODES: Mode[] = ["ask", "accept_edits", "plan", "auto"];
@@ -377,6 +378,12 @@ export function ChatView({
   const scrollEnd = useRef<HTMLDivElement | null>(null);
   const loadedRef = useRef(false);
 
+  // Files panel state. `filesNonce` is the refresh signal — bumped when a turn
+  // finishes or an inline workflow ends so the panel re-scans the working tree.
+  const [filesOpen, setFilesOpen] = useState(false);
+  const [filesNonce, setFilesNonce] = useState(0);
+  const [filesCount, setFilesCount] = useState(0);
+
   const applySession = (s: NonNullable<Awaited<ReturnType<typeof api.loadChat>>>) => {
     if (s.agent) setAgent(s.agent);
     setModel(s.model ?? "");
@@ -443,6 +450,17 @@ export function ChatView({
   useEffect(() => {
     scrollEnd.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages]);
+
+  // Whenever the chat finishes a turn (busy goes false), refresh the files
+  // panel so newly-touched files show up. Also fires the first time the panel
+  // becomes visible — `filesNonce` is its only refresh trigger.
+  const wasBusyRef = useRef(false);
+  useEffect(() => {
+    if (wasBusyRef.current && !busy) {
+      setFilesNonce((n) => n + 1);
+    }
+    wasBusyRef.current = busy;
+  }, [busy]);
 
   // After a turn finishes streaming, look at the final assistant message —
   // if it reads like a structured question list (e.g. when the AskUserQuestion
@@ -1039,10 +1057,19 @@ export function ChatView({
               </option>
             ))}
           </select>
+          <button
+            className={`composer__pill${filesOpen ? " is-active" : ""}`}
+            onClick={() => setFilesOpen((v) => !v)}
+            title={filesOpen ? "Hide files panel" : "Show changed files"}
+          >
+            <Icon name="folder" size={11} /> Files
+            {filesCount > 0 && <span className="files-toggle__badge">{filesCount}</span>}
+          </button>
         </div>
       </div>
 
-      <div className="scroll">
+      <div className={`chat-body${filesOpen ? " has-files" : ""}`}>
+        <div className="scroll">
         {messages.length === 0 && (
           <div className="empty">
             <div className="empty__inner">
@@ -1070,6 +1097,15 @@ export function ChatView({
           </div>
         ))}
         <div ref={scrollEnd} />
+        </div>
+        <FilesPanel
+          sessionKey={convIdRef.current}
+          projectDir={projectDir}
+          refreshNonce={filesNonce}
+          open={filesOpen}
+          onClose={() => setFilesOpen(false)}
+          onCountChange={setFilesCount}
+        />
       </div>
 
       <div className="composer">

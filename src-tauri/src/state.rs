@@ -23,6 +23,11 @@ pub struct AppState {
     /// Long-lived ACP connections, keyed by conversation id and reused across
     /// turns so the agent keeps context. Killed on new-session / close.
     pub acp_conns: Arc<Mutex<HashMap<Uuid, Arc<AcpConn>>>>,
+    /// Git commit baseline captured the first time the files panel is opened
+    /// for a given session (key = conv_id or run_id). Lets the panel show
+    /// "what changed during this conversation/run" instead of every uncommitted
+    /// edit in the repo.
+    pub baselines: Arc<Mutex<HashMap<String, String>>>,
 }
 
 impl AppState {
@@ -33,6 +38,7 @@ impl AppState {
             improves: Arc::new(Mutex::new(HashMap::new())),
             chats: Arc::new(Mutex::new(HashMap::new())),
             acp_conns: Arc::new(Mutex::new(HashMap::new())),
+            baselines: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }

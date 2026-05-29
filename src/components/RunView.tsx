@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api, Channel, LogEvent, Workflow } from "../lib/ipc";
 import { Icon } from "./Icon";
+import { FilesPanel } from "./FilesPanel";
 
 type Status = "pending" | "running" | "done" | "failed" | "skipped" | "awaiting";
 type StepState = { status: Status; exit?: number; agent?: string; attempt?: number };
@@ -41,6 +42,11 @@ export function RunView({
   const [logs, setLogs] = useState<LogLine[]>([]);
   const [awaiting, setAwaiting] = useState<{ stepId: string; title: string } | null>(null);
   const [finished, setFinished] = useState<string | null>(null);
+  // Files panel state. Bumping `filesNonce` re-scans the working tree; we do
+  // that on every step boundary and when the run ends.
+  const [filesOpen, setFilesOpen] = useState(false);
+  const [filesNonce, setFilesNonce] = useState(0);
+  const [filesCount, setFilesCount] = useState(0);
 
   const started = useRef(false);
   const runIdRef = useRef<string | null>(null);
@@ -85,6 +91,7 @@ export function RunView({
           break;
         case "step_finished":
           setStep(ev.step_id, { status: ev.exit_code === 0 ? "done" : "failed", exit: ev.exit_code });
+          setFilesNonce((n) => n + 1);
           break;
         case "step_skipped":
           setStep(ev.step_id, { status: "skipped" });
@@ -116,6 +123,7 @@ export function RunView({
           break;
         case "done":
           finish("done");
+          setFilesNonce((n) => n + 1);
           addLog({ kind: "info", text: "✔ done" });
           break;
         case "error":
@@ -170,6 +178,14 @@ export function RunView({
             <span className="tag__dot" />
             {statusTag.label}
           </span>
+          <button
+            className={`composer__pill${filesOpen ? " is-active" : ""}`}
+            onClick={() => setFilesOpen((v) => !v)}
+            title={filesOpen ? "Hide files panel" : "Show changed files"}
+          >
+            <Icon name="folder" size={11} /> Files
+            {filesCount > 0 && <span className="files-toggle__badge">{filesCount}</span>}
+          </button>
           {!finished && runId && (
             <button className="btn-danger" onClick={() => api.cancel(runId).catch(() => {})}>
               <Icon name="x" size={11} /> Cancel
@@ -178,7 +194,7 @@ export function RunView({
         </div>
       </div>
 
-      <div className="run-body">
+      <div className={`run-body${filesOpen ? " has-files" : ""}`}>
         <ol className="run-steps">
           {workflow.steps.map((s) => {
             const st = steps[s.id];
@@ -203,6 +219,15 @@ export function RunView({
           ))}
           <div ref={logEnd} />
         </div>
+
+        <FilesPanel
+          sessionKey={runId ?? "pending"}
+          projectDir={_projectDir}
+          refreshNonce={filesNonce}
+          open={filesOpen}
+          onClose={() => setFilesOpen(false)}
+          onCountChange={setFilesCount}
+        />
       </div>
 
       {awaiting && (

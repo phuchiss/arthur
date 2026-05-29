@@ -133,6 +133,28 @@ export type ChatSummary = {
   message_count: number;
 };
 
+/** Mirrors the Rust `files::FileStatus` (serde snake_case). */
+export type FileStatus =
+  | "modified"
+  | "added"
+  | "deleted"
+  | "renamed"
+  | "untracked"
+  | "unchanged";
+export type ChangedFile = { path: string; status: FileStatus };
+export type ChangedFilesResult = {
+  files: ChangedFile[];
+  git_available: boolean;
+  truncated: boolean;
+};
+export type FilePreview = {
+  content: string;
+  truncated: boolean;
+  binary: boolean;
+  /** `data:<mime>;base64,…` URL for inlined image files; null otherwise. */
+  image: string | null;
+};
+
 export { Channel };
 
 export const api = {
@@ -196,4 +218,14 @@ export const api = {
   approve: (runId: string, decision: "approve" | "reject") =>
     invoke<void>("approve", { runId, decision }),
   cancel: (runId: string) => invoke<void>("cancel", { runId }),
+  listChangedFiles: (sessionKey: string, projectDir: string) =>
+    invoke<ChangedFilesResult>("list_changed_files", { sessionKey, projectDir }),
+  listAllFiles: (sessionKey: string, projectDir: string) =>
+    invoke<ChangedFilesResult>("list_all_files", { sessionKey, projectDir }),
+  readFilePreview: (projectDir: string, relPath: string) =>
+    invoke<FilePreview>("read_file_preview", { projectDir, relPath }),
+  diffFile: (sessionKey: string, projectDir: string, relPath: string) =>
+    invoke<string>("diff_file", { sessionKey, projectDir, relPath }),
+  resetFilesBaseline: (sessionKey: string, projectDir: string) =>
+    invoke<string>("reset_files_baseline", { sessionKey, projectDir }),
 };

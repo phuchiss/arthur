@@ -4,6 +4,7 @@ use crate::engine::{
     parse_workflow, run_workflow, AgentRunner, CommandInfo, Decision, EventSink, LogEvent, Workflow,
 };
 use crate::chatstore::{self, ChatSession, ChatSummary};
+use crate::files::{self, ChangedFilesResult, FilePreview};
 use crate::runstore::{self, RunRecord};
 use crate::state::{AppState, RunCtl};
 use serde::Serialize;
@@ -792,4 +793,110 @@ pub async fn cancel(state: State<'_, AppState>, run_id: String) -> Result<(), St
         }
         None => Err("run not found".into()),
     }
+}
+
+/// Look up (or lazily capture) the git baseline for `session_key`, returning
+/// the commit sha used for diffs in that session. Falls back to "HEAD" when
+/// the project isn't a git repo or `git rev-parse HEAD` fails (e.g. brand-new
+/// repo with zero commits).
+async fn get_or_init_baseline(
+    state: &AppState,
+    session_key: &str,
+    project_dir: &std::path::Path,
+) -> String {
+    {
+        let map = state.baselines.lock().await;
+        if let Some(sha) = map.get(session_key) {
+            return sha.clone();
+        }
+    }
+    let sha = files::snapshot_head(project_dir).unwrap_or_else(|_| "HEAD".to_string());
+    state
+        .baselines
+        .lock()
+        .await
+        .insert(session_key.to_string(), sha.clone());
+    sha
+}
+
+/// List files that have changed in the working tree relative to the session's
+/// captured baseline. The baseline is snapshotted on first call so the panel
+/// only shows what changed during this conversation/run, not every uncommitted
+/// edit the user already had on disk.
+#[tauri::command]
+pub async fn list_changed_files(
+    state: State<'_, AppState>,
+    session_key: String,
+    project_dir: String,
+) -> Result<ChangedFilesResult, String> {
+    let dir = std::path::PathBuf::from(&project_dir);
+    if !files::is_git_repo(&dir) {
+        return Ok(ChangedFilesResult {
+            files: Vec::new(),
+            git_available: false,
+            truncated: false,
+        });
+    }
+    let baseline = get_or_init_baseline(&state, &session_key, &dir).await;
+    files::changed_files(&dir, &baseline)
+}
+
+/// List every tracked + untracked file in the project, each tagged with its
+/// status relative to the session baseline. Backs the panel's "All" view.
+#[tauri::command]
+pub async fn list_all_files(
+    state: State<'_, AppState>,
+    session_key: String,
+    project_dir: String,
+) -> Result<ChangedFilesResult, String> {
+    let dir = std::path::PathBuf::from(&project_dir);
+    if !files::is_git_repo(&dir) {
+        return Ok(ChangedFilesResult {
+            files: Vec::new(),
+            git_available: false,
+            truncated: false,
+        });
+    }
+    let baseline = get_or_init_baseline(&state, &session_key, &dir).await;
+    files::all_files(&dir, &baseline)
+}
+
+/// Read a working-tree file as UTF-8 (lossy), capped at 1 MB. Binary files
+/// (NUL byte in the first 8 KB) are reported via the `binary` flag instead of
+/// returning garbled content.
+#[tauri::command]
+pub fn read_file_preview(project_dir: String, rel_path: String) -> Result<FilePreview, String> {
+    files::preview(&std::path::PathBuf::from(&project_dir), &rel_path)
+}
+
+/// Unified-diff the file against the session's baseline. Untracked files are
+/// diffed against `/dev/null` so additions still render.
+#[tauri::command]
+pub async fn diff_file(
+    state: State<'_, AppState>,
+    session_key: String,
+    project_dir: String,
+    rel_path: String,
+) -> Result<String, String> {
+    let dir = std::path::PathBuf::from(&project_dir);
+    let baseline = get_or_init_baseline(&state, &session_key, &dir).await;
+    files::diff(&dir, &baseline, &rel_path)
+}
+
+/// Re-snapshot HEAD as the session's baseline. The next call to
+/// `list_changed_files` will reflect only changes made after this point.
+#[tauri::command]
+pub async fn reset_files_baseline(
+    state: State<'_, AppState>,
+    session_key: String,
+    project_dir: String,
+) -> Result<String, String> {
+    let dir = std::path::PathBuf::from(&project_dir);
+    let sha = files::snapshot_head(&dir).unwrap_or_else(|_| "HEAD".to_string());
+    state
+        .baselines
+        .lock()
+        .await
+        .insert(session_key, sha.clone());
+    Ok(sha)
 }

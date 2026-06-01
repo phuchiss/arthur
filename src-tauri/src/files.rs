@@ -59,6 +59,26 @@ pub fn is_git_repo(project_dir: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Current branch name, or `None` for detached HEAD / not a git repo. Used by
+/// the footer status bar — we intentionally don't fall back to a sha here
+/// because the bar is one short label, not a commit display.
+pub fn current_branch(project_dir: &Path) -> Option<String> {
+    let out = Command::new("git")
+        .args(["branch", "--show-current"])
+        .current_dir(project_dir)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let name = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if name.is_empty() {
+        None
+    } else {
+        Some(name)
+    }
+}
+
 /// Resolve the current HEAD commit sha for the project. Used as the baseline
 /// captured the first time the panel is opened in a session.
 pub fn snapshot_head(project_dir: &Path) -> Result<String, String> {

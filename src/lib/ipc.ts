@@ -257,6 +257,8 @@ export const api = {
     invoke<string>("diff_file", { sessionKey, projectDir, relPath }),
   resetFilesBaseline: (sessionKey: string, projectDir: string) =>
     invoke<string>("reset_files_baseline", { sessionKey, projectDir }),
+  gitCurrentBranch: (projectDir: string) =>
+    invoke<string | null>("git_current_branch", { projectDir }),
   listRecentProjects: () => invoke<RecentProject[]>("list_recent_projects"),
   addRecentProject: (path: string) => invoke<void>("add_recent_project", { path }),
   removeRecentProject: (path: string) =>

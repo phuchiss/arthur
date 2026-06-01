@@ -902,6 +902,14 @@ pub async fn reset_files_baseline(
     Ok(sha)
 }
 
+/// Current git branch for `project_dir`, or `None` if not a git repo / detached
+/// HEAD. Footer status bar uses this; everything else that cares about git
+/// state goes through the baseline-aware files commands above.
+#[tauri::command]
+pub fn git_current_branch(project_dir: String) -> Option<String> {
+    files::current_branch(&std::path::PathBuf::from(&project_dir))
+}
+
 /// Recent projects, newest first, with missing directories filtered out.
 #[tauri::command]
 pub fn list_recent_projects(app: AppHandle) -> Result<Vec<RecentProject>, String> {

@@ -856,11 +856,14 @@ input, textarea, select {
 }
 .tool-group__body {
   border-top: 1px solid var(--hairline);
-  padding: 4px 8px 8px;
+  padding: 4px 10px 6px;
 }
 .tool-group__body .msg__activity {
-  margin: 4px 0;
-  border-left-width: 1px;
+  margin: 0;
+  padding: 2px 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 .tool-group.is-open .tool-group__head { background: var(--surface); }
 

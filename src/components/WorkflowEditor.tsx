@@ -195,6 +195,7 @@ export function WorkflowEditor({
         </div>
       </div>
 
+      <div className="workflow-editor">
       <div className="editor__ai">
         <span className="editor__ai-label">✨ Improve with</span>
         <select
@@ -285,6 +286,7 @@ export function WorkflowEditor({
             )}
           </div>
         )}
+      </div>
       </div>
     </div>
   );

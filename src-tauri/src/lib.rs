@@ -4,6 +4,7 @@ mod chatstore;
 mod commands;
 mod engine;
 mod files;
+mod projectstore;
 mod runstore;
 mod state;
 
@@ -64,6 +65,10 @@ pub fn run() {
             commands::read_file_preview,
             commands::diff_file,
             commands::reset_files_baseline,
+            commands::list_recent_projects,
+            commands::add_recent_project,
+            commands::remove_recent_project,
+            commands::clear_recent_projects,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

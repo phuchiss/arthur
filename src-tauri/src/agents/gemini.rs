@@ -22,6 +22,12 @@ impl AgentAdapter for Gemini {
             Mode::Auto => "yolo",
         };
         command.arg("--approval-mode").arg(mode);
+        // Gemini downgrades --approval-mode to "default" (and warns) in an
+        // untrusted directory. Only opt into trust for modes that actually
+        // modify files; Ask mode reads only and should respect workspace trust.
+        if !matches!(inv.mode, Mode::Ask) {
+            command.arg("--skip-trust");
+        }
         command.current_dir(&inv.working_dir);
         BuiltCommand {
             command,

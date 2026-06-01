@@ -1,6 +1,13 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { api, Availability, ChatSummary, Workflow, WorkflowSummary } from "./lib/ipc";
+import {
+  api,
+  Availability,
+  ChatSummary,
+  RecentProject,
+  Workflow,
+  WorkflowSummary,
+} from "./lib/ipc";
 import { RunView } from "./components/RunView";
 import { ChatView } from "./components/ChatView";
 import { EditorTarget, WorkflowEditor } from "./components/WorkflowEditor";
@@ -57,19 +64,63 @@ export default function App() {
   const [agents, setAgents] = useState<Availability[]>([]);
   const [workflows, setWorkflows] = useState<WorkflowSummary[]>([]);
   const [sessions, setSessions] = useState<ChatSummary[]>([]);
+  const [recents, setRecents] = useState<RecentProject[]>([]);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [selected, setSelected] = useState<Workflow | null>(null);
   const [inputs, setInputs] = useState<Record<string, string>>({});
   const [view, setView] = useState<View>({ kind: "empty" });
   const [sessFilter, setSessFilter] = useState("");
   const [wfFilter, setWfFilter] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const projMenuRef = useRef<HTMLDivElement | null>(null);
 
   const refreshAgents = () =>
     api.checkAgents().then(setAgents).catch((e) => setError(String(e)));
 
+  const refreshRecents = async (): Promise<RecentProject[]> => {
+    try {
+      const list = await api.listRecentProjects();
+      setRecents(list);
+      return list;
+    } catch {
+      setRecents([]);
+      return [];
+    }
+  };
+
   useEffect(() => {
     refreshAgents();
+    // Boot restore: auto-open the most recent project so the user doesn't have
+    // to repick on every launch. Missing dirs are already filtered backend-side.
+    (async () => {
+      const list = await refreshRecents();
+      const newest = list[0];
+      if (!newest) return;
+      setProject(newest.path);
+      await Promise.all([
+        refreshWorkflows(newest.path),
+        refreshSessions(newest.path),
+      ]);
+      setView({ kind: "chat", nonce: Date.now() });
+    })();
   }, []);
+
+  // Close the recent-projects menu on click-outside / Escape.
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (!projMenuRef.current?.contains(e.target as Node)) setMenuOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMenuOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [menuOpen]);
 
   const refreshSessions = async (dir: string) => {
     try {
@@ -88,15 +139,53 @@ export default function App() {
     }
   };
 
+  const openProject = async (dir: string) => {
+    setProject(dir);
+    setSelected(null);
+    try {
+      await api.addRecentProject(dir);
+    } catch {
+      // Non-fatal: dir vanished between picker and save. Continue opening.
+    }
+    await Promise.all([
+      refreshWorkflows(dir),
+      refreshSessions(dir),
+      refreshRecents(),
+    ]);
+    setView({ kind: "chat", nonce: Date.now() });
+  };
+
   const pickProject = async () => {
     setError(null);
+    setMenuOpen(false);
     const dir = await open({ directory: true, multiple: false, title: "Select project repository" });
     if (typeof dir === "string") {
-      setProject(dir);
-      setSelected(null);
-      await Promise.all([refreshWorkflows(dir), refreshSessions(dir)]);
-      setView({ kind: "chat", nonce: Date.now() });
+      await openProject(dir);
     }
+  };
+
+  const chooseRecent = async (dir: string) => {
+    setError(null);
+    setMenuOpen(false);
+    await openProject(dir);
+  };
+
+  const dropRecent = async (path: string) => {
+    try {
+      await api.removeRecentProject(path);
+    } catch {
+      // ignore — list refresh will reflect actual state.
+    }
+    await refreshRecents();
+  };
+
+  const clearRecents = async () => {
+    try {
+      await api.clearRecentProjects();
+    } catch {
+      // ignore
+    }
+    await refreshRecents();
   };
 
   const openWorkflow = async (path: string) => {
@@ -197,23 +286,77 @@ export default function App() {
         </div>
 
         <div className="header__center">
-          <button
-            className="proj"
-            onClick={pickProject}
-            title={project ? `${project} — click to switch` : "Open a project"}
-          >
-            <span className="proj__icon" />
-            {project ? (
-              <>
+          <div className="proj-wrap" ref={projMenuRef}>
+            <button
+              className="proj"
+              onClick={pickProject}
+              title={project ? `${project} — click to switch` : "Open a project"}
+            >
+              <span className="proj__icon" />
+              {project ? (
                 <span className="proj__path">{project}</span>
-              </>
-            ) : (
-              <span className="proj__name">Open project…</span>
-            )}
-            <span className="proj__caret">
+              ) : (
+                <span className="proj__name">Open project…</span>
+              )}
+            </button>
+            <button
+              className="proj__caret-btn"
+              onClick={() => setMenuOpen((v) => !v)}
+              title="Recent projects"
+              aria-label="Recent projects"
+            >
               <Icon name="chev-down" size={12} />
-            </span>
-          </button>
+            </button>
+            {menuOpen && (
+              <div className="proj__menu" role="menu">
+                {recents.length === 0 ? (
+                  <div className="proj__menu-empty">No recent projects yet.</div>
+                ) : (
+                  <div className="proj__menu-list">
+                    {recents.map((r) => (
+                      <div
+                        key={r.path}
+                        className={`proj__item ${project === r.path ? "is-active" : ""}`}
+                        onClick={() => chooseRecent(r.path)}
+                        role="menuitem"
+                      >
+                        <div className="proj__item__body">
+                          <div className="proj__item__name">{basename(r.path)}</div>
+                          <div className="proj__item__path">{r.path}</div>
+                        </div>
+                        <div className="proj__item__time">
+                          {formatRelative(r.last_opened_at)}
+                        </div>
+                        <button
+                          className="proj__item__del"
+                          title="Forget this project"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            dropRecent(r.path);
+                          }}
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div className="proj__menu__footer">
+                  <button className="proj__menu__btn" onClick={pickProject}>
+                    <Icon name="folder" size={11} /> Browse…
+                  </button>
+                  {recents.length > 0 && (
+                    <button
+                      className="proj__menu__btn proj__menu__btn--ghost"
+                      onClick={clearRecents}
+                    >
+                      Clear recents
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="header__right">

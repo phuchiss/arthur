@@ -5,6 +5,7 @@ use crate::engine::{
 };
 use crate::chatstore::{self, ChatSession, ChatSummary};
 use crate::files::{self, ChangedFilesResult, FilePreview};
+use crate::projectstore::{self, RecentProject};
 use crate::runstore::{self, RunRecord};
 use crate::state::{AppState, RunCtl};
 use serde::Serialize;
@@ -899,4 +900,37 @@ pub async fn reset_files_baseline(
         .await
         .insert(session_key, sha.clone());
     Ok(sha)
+}
+
+/// Recent projects, newest first, with missing directories filtered out.
+#[tauri::command]
+pub fn list_recent_projects(app: AppHandle) -> Result<Vec<RecentProject>, String> {
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    Ok(projectstore::list(&dir))
+}
+
+/// Record that the user opened `path`. Rejects paths that aren't an existing
+/// directory so we never persist invalid entries.
+#[tauri::command]
+pub fn add_recent_project(app: AppHandle, path: String) -> Result<(), String> {
+    if !std::path::Path::new(&path).is_dir() {
+        return Err(format!("{path} is not a directory"));
+    }
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    projectstore::add(&dir, &path);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn remove_recent_project(app: AppHandle, path: String) -> Result<(), String> {
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    projectstore::remove(&dir, &path);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn clear_recent_projects(app: AppHandle) -> Result<(), String> {
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    projectstore::clear(&dir);
+    Ok(())
 }

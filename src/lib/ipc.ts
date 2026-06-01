@@ -178,6 +178,12 @@ export type FilePreview = {
   image: string | null;
 };
 
+/** Mirrors the Rust `projectstore::RecentProject` (serde snake_case). */
+export type RecentProject = {
+  path: string;
+  last_opened_at: number;
+};
+
 export { Channel };
 
 export const api = {
@@ -251,4 +257,9 @@ export const api = {
     invoke<string>("diff_file", { sessionKey, projectDir, relPath }),
   resetFilesBaseline: (sessionKey: string, projectDir: string) =>
     invoke<string>("reset_files_baseline", { sessionKey, projectDir }),
+  listRecentProjects: () => invoke<RecentProject[]>("list_recent_projects"),
+  addRecentProject: (path: string) => invoke<void>("add_recent_project", { path }),
+  removeRecentProject: (path: string) =>
+    invoke<void>("remove_recent_project", { path }),
+  clearRecentProjects: () => invoke<void>("clear_recent_projects"),
 };

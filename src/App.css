@@ -146,6 +146,144 @@ input, textarea, select {
 .proj__name { color: var(--ink); font-weight: 500; white-space: nowrap; }
 .proj__caret { color: var(--faint); margin-left: 4px; }
 
+.proj-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.proj__caret-btn {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 28px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--hairline);
+  background: var(--paper);
+  color: var(--ink-2);
+}
+.proj__caret-btn:hover { background: var(--surface); border-color: var(--rule); }
+.proj__caret-btn svg { width: 12px; height: 12px; }
+
+.proj__menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 320px;
+  max-width: 520px;
+  background: var(--paper);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.12);
+  z-index: 60;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+}
+
+.proj__menu-empty {
+  padding: 14px 12px;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.proj__menu-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.proj__item {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 8px;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+.proj__item:hover { background: var(--surface); }
+.proj__item.is-active {
+  background: var(--bg);
+  border-color: var(--hairline);
+  box-shadow: 0 0 0 1px var(--accent-soft) inset;
+}
+
+.proj__item__body { min-width: 0; }
+.proj__item__name {
+  font-size: 12.5px;
+  color: var(--ink);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.proj__item__path {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+  margin-top: 2px;
+}
+.proj__item__time {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.proj__item__del {
+  border: 0;
+  background: transparent;
+  color: var(--faint);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: var(--r-sm);
+  opacity: 0;
+}
+.proj__item:hover .proj__item__del { opacity: 1; }
+.proj__item__del:hover { color: var(--err); background: var(--bg); }
+
+.proj__menu__footer {
+  display: flex;
+  gap: 6px;
+  padding: 6px 4px 2px;
+  margin-top: 4px;
+  border-top: 1px solid var(--hairline);
+}
+.proj__menu__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--hairline);
+  background: var(--paper);
+  color: var(--ink-2);
+  font-size: 11.5px;
+  cursor: pointer;
+  height: 24px;
+}
+.proj__menu__btn:hover { background: var(--surface); border-color: var(--rule); }
+.proj__menu__btn--ghost {
+  margin-left: auto;
+  border-color: transparent;
+  color: var(--muted);
+}
+.proj__menu__btn--ghost:hover { color: var(--err); border-color: color-mix(in oklch, var(--err) 25%, var(--hairline)); background: var(--paper); }
+
 .header__center {
   display: flex; justify-content: center; align-items: center;
   gap: 14px;
@@ -489,7 +627,7 @@ input, textarea, select {
 
 .main {
   display: grid;
-  grid-template-rows: auto 1fr auto;
+  grid-template-rows: auto 1fr;
   min-width: 0;
   min-height: 0;
   background: var(--bg);
@@ -577,6 +715,7 @@ input, textarea, select {
   font-family: var(--font-mono);
   font-size: 12px;
   border-bottom: 1px solid color-mix(in oklch, var(--err) 25%, var(--hairline));
+  flex-shrink: 0;
 }
 
 /* Scroll body */
@@ -1530,11 +1669,11 @@ input, textarea, select {
 
 /* ───── Workflow editor ───── */
 
-.editor {
-  display: grid;
-  grid-template-rows: auto auto auto 1fr;
-  height: 100%;
+.workflow-editor {
+  display: flex;
+  flex-direction: column;
   min-height: 0;
+  overflow: hidden;
 }
 
 .editor__ai {
@@ -1545,6 +1684,7 @@ input, textarea, select {
   border-bottom: 1px solid var(--hairline);
   background: var(--paper);
   font-size: 11.5px;
+  flex-shrink: 0;
 }
 .editor__ai-label { color: var(--muted); white-space: nowrap; }
 .editor__instruction {
@@ -1569,6 +1709,7 @@ input, textarea, select {
   grid-template-columns: 1fr 360px;
   min-height: 0;
   overflow: hidden;
+  flex: 1;
 }
 .editor__body.no-preview { grid-template-columns: 1fr; }
 

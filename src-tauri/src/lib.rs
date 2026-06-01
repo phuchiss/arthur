@@ -65,6 +65,7 @@ pub fn run() {
             commands::read_file_preview,
             commands::diff_file,
             commands::reset_files_baseline,
+            commands::git_current_branch,
             commands::list_recent_projects,
             commands::add_recent_project,
             commands::remove_recent_project,

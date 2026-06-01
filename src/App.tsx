@@ -61,6 +61,7 @@ function formatRelative(unixSec: number): string {
 
 export default function App() {
   const [project, setProject] = useState<string | null>(null);
+  const [branch, setBranch] = useState<string | null>(null);
   const [agents, setAgents] = useState<Availability[]>([]);
   const [workflows, setWorkflows] = useState<WorkflowSummary[]>([]);
   const [sessions, setSessions] = useState<ChatSummary[]>([]);
@@ -104,6 +105,17 @@ export default function App() {
       setView({ kind: "chat", nonce: Date.now() });
     })();
   }, []);
+
+  // Refresh git branch when project changes. The status bar reflects whatever
+  // branch the user is on right now; we don't subscribe to file events, so it
+  // only refreshes on project switch — good enough for a passive label.
+  useEffect(() => {
+    if (!project) {
+      setBranch(null);
+      return;
+    }
+    api.gitCurrentBranch(project).then(setBranch).catch(() => setBranch(null));
+  }, [project]);
 
   // Close the recent-projects menu on click-outside / Escape.
   useEffect(() => {
@@ -631,10 +643,14 @@ export default function App() {
           <Icon name="folder" size={11} />{" "}
           <span className="footer__path">{project ? basename(project) : "no project"}</span>
         </span>
-        <span className="sep">·</span>
-        <span>
-          <Icon name="branch" size={11} /> main
-        </span>
+        {branch && (
+          <>
+            <span className="sep">·</span>
+            <span>
+              <Icon name="branch" size={11} /> {branch}
+            </span>
+          </>
+        )}
         <span className="sep">·</span>
         <span className={footerStatus.tone}>●</span> <span>{footerStatus.text}</span>
         <div className="right">

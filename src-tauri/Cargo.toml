@@ -27,7 +27,7 @@ serde_norway = "0.9.42"
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "process", "io-util", "sync", "macros", "time"] }
 tokio-util = "0.7.18"
 pulldown-cmark = "0.13.4"
-evalexpr = "13.1.0"
+evalexpr = { version = "13.1.0", features = ["regex"] }
 uuid = { version = "1.23.1", features = ["v4", "serde"] }
 which = "8.0.2"
 

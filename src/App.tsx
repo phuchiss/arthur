@@ -106,15 +106,41 @@ export default function App() {
     })();
   }, []);
 
-  // Refresh git branch when project changes. The status bar reflects whatever
-  // branch the user is on right now; we don't subscribe to file events, so it
-  // only refreshes on project switch — good enough for a passive label.
+  // Refresh git branch when project changes, on window focus, and on a light
+  // poll while visible — so `git checkout` in a side terminal is reflected
+  // without needing a project switch.
   useEffect(() => {
     if (!project) {
       setBranch(null);
       return;
     }
-    api.gitCurrentBranch(project).then(setBranch).catch(() => setBranch(null));
+    let cancelled = false;
+    const refresh = () => {
+      api
+        .gitCurrentBranch(project)
+        .then((b) => {
+          if (!cancelled) setBranch(b);
+        })
+        .catch(() => {
+          if (!cancelled) setBranch(null);
+        });
+    };
+    refresh();
+    const onFocus = () => refresh();
+    const onVis = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVis);
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === "visible") refresh();
+    }, 3000);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVis);
+      window.clearInterval(interval);
+    };
   }, [project]);
 
   // Close the recent-projects menu on click-outside / Escape.

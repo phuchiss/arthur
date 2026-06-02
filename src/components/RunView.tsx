@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { api, Channel, LogEvent, Workflow } from "../lib/ipc";
+import { api, Channel, LogEvent, UserQuestion, Workflow } from "../lib/ipc";
 import { Icon } from "./Icon";
 import { FilesPanel } from "./FilesPanel";
+import { AskUserDialog } from "./AskUserDialog";
 
 type Status = "pending" | "running" | "done" | "failed" | "skipped" | "awaiting";
 type StepState = { status: Status; exit?: number; agent?: string; attempt?: number };
@@ -41,6 +42,17 @@ export function RunView({
   );
   const [logs, setLogs] = useState<LogLine[]>([]);
   const [awaiting, setAwaiting] = useState<{ stepId: string; title: string } | null>(null);
+  const [askDialog, setAskDialog] = useState<{
+    stepId: string;
+    requestId: string;
+    questions: UserQuestion[];
+  } | null>(null);
+  const [awaitingMsg, setAwaitingMsg] = useState<{
+    stepId: string;
+    requestId: string;
+    lastText: string;
+  } | null>(null);
+  const [replyDraft, setReplyDraft] = useState("");
   const [finished, setFinished] = useState<string | null>(null);
   // Files panel state. Bumping `filesNonce` re-scans the working tree; we do
   // that on every step boundary and when the run ends.
@@ -117,6 +129,31 @@ export function RunView({
           finish("rejected");
           addLog({ kind: "info", stepId: ev.step_id, text: `✕ rejected ${ev.step_id}` });
           break;
+        case "ask_user_question":
+          setAskDialog({
+            stepId: ev.step_id,
+            requestId: ev.request_id,
+            questions: ev.questions,
+          });
+          addLog({
+            kind: "info",
+            stepId: ev.step_id,
+            text: `❓ awaiting answer (${ev.questions.length} question${ev.questions.length === 1 ? "" : "s"})`,
+          });
+          break;
+        case "awaiting_message":
+          setAwaitingMsg({
+            stepId: ev.step_id,
+            requestId: ev.request_id,
+            lastText: ev.last_text,
+          });
+          setReplyDraft("");
+          addLog({
+            kind: "info",
+            stepId: ev.step_id,
+            text: "❓ awaiting your reply (type below, or End step)",
+          });
+          break;
         case "cancelled":
           finish("cancelled");
           addLog({ kind: "info", text: "■ cancelled" });
@@ -159,6 +196,26 @@ export function RunView({
   const decide = (decision: "approve" | "reject") => {
     if (runIdRef.current) api.approve(runIdRef.current, decision).catch(() => {});
     setAwaiting(null);
+  };
+
+  const sendReply = () => {
+    if (!awaitingMsg || !runIdRef.current) return;
+    const text = replyDraft.trim();
+    if (!text) return;
+    api
+      .respondMessage(runIdRef.current, awaitingMsg.stepId, awaitingMsg.requestId, text)
+      .catch(() => {});
+    setAwaitingMsg(null);
+    setReplyDraft("");
+  };
+
+  const endStep = () => {
+    if (!awaitingMsg || !runIdRef.current) return;
+    api
+      .respondMessage(runIdRef.current, awaitingMsg.stepId, awaitingMsg.requestId, null)
+      .catch(() => {});
+    setAwaitingMsg(null);
+    setReplyDraft("");
   };
 
   const statusTag = STATUS_TAG[finished ?? "active"];
@@ -248,6 +305,69 @@ export function RunView({
             </div>
           </div>
         </div>
+      )}
+
+      {awaitingMsg && (
+        <div className="modal-backdrop">
+          <div className="reply-modal">
+            <div className="reply-modal__head">
+              <h3 className="reply-modal__title">Reply to {awaitingMsg.stepId}</h3>
+              <span className="reply-modal__hint">
+                {awaitingMsg.lastText.length.toLocaleString()} chars · scroll to read
+              </span>
+            </div>
+            <pre className="reply-modal__question">{awaitingMsg.lastText}</pre>
+            <textarea
+              className="reply-modal__textarea"
+              value={replyDraft}
+              onChange={(e) => setReplyDraft(e.target.value)}
+              placeholder="Type your reply…"
+              rows={4}
+              autoFocus
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                  e.preventDefault();
+                  sendReply();
+                }
+              }}
+            />
+            <div className="reply-modal__actions">
+              <button className="btn-ghost" onClick={endStep}>
+                End step
+              </button>
+              <span style={{ flex: 1 }} />
+              <button
+                className="btn-primary"
+                disabled={!replyDraft.trim()}
+                onClick={sendReply}
+              >
+                Send (⌘↩)
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {askDialog && (
+        <AskUserDialog
+          questions={askDialog.questions}
+          onSubmit={(answers) => {
+            if (runIdRef.current) {
+              api
+                .respondAsk(runIdRef.current, askDialog.stepId, askDialog.requestId, answers)
+                .catch(() => {});
+            }
+            setAskDialog(null);
+          }}
+          onCancel={() => {
+            if (runIdRef.current) {
+              api
+                .respondAsk(runIdRef.current, askDialog.stepId, askDialog.requestId, null)
+                .catch(() => {});
+            }
+            setAskDialog(null);
+          }}
+        />
       )}
     </div>
   );

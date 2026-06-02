@@ -7,10 +7,26 @@ use tokio::sync::{mpsc, Mutex};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+/// User's answers to one `AskUserQuestion` invocation, routed from the UI
+/// back to the workflow runner. `answers` parallels the original `questions`
+/// vector; an empty string in a slot means "skipped". `answers: None` is the
+/// dismiss/cancel signal — the runner treats it as "stop asking, accept what
+/// you have" and ends the step.
+#[derive(Debug, Clone)]
+pub struct AskAnswer {
+    pub step_id: String,
+    pub request_id: String,
+    pub answers: Option<Vec<String>>,
+}
+
 /// Control handles for an in-flight run, looked up by the approve/cancel commands.
 pub struct RunCtl {
     pub cancel: CancellationToken,
     pub decision_tx: mpsc::Sender<Decision>,
+    /// Answers from the `AskUserQuestion` dialog. Buffered so the runner can
+    /// read them in the order the user submitted, even if it isn't blocked
+    /// `recv`ing yet (e.g. the agent is still streaming the turn).
+    pub ask_answer_tx: mpsc::Sender<AskAnswer>,
 }
 
 pub struct AppState {

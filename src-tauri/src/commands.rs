@@ -1,5 +1,6 @@
+use crate::acp::AcpConn;
 use crate::agents::{run_agent, Availability};
-use crate::engine::model::{AgentInvocation, Mode};
+use crate::engine::model::{AgentInvocation, AgentResult, Mode, Transport};
 use crate::engine::{
     parse_workflow, run_workflow, AgentRunner, CommandInfo, Decision, EventSink, LogEvent, Workflow,
 };
@@ -7,7 +8,7 @@ use crate::chatstore::{self, ChatSession, ChatSummary};
 use crate::files::{self, ChangedFilesResult, FilePreview};
 use crate::projectstore::{self, RecentProject};
 use crate::runstore::{self, RunRecord};
-use crate::state::{AppState, RunCtl};
+use crate::state::{AppState, AskAnswer, RunCtl};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -220,6 +221,8 @@ pub async fn improve_workflow(
         working_dir,
         step_id: "improve".to_string(),
         resume: None,
+        transport: crate::engine::model::Transport::Cli,
+        interactive: false,
     };
 
     let cancel = CancellationToken::new();
@@ -303,6 +306,182 @@ pub async fn start_chat(
     result
 }
 
+/// How many follow-up `session/prompt` calls a single ACP-transport workflow
+/// step may make before we give up. Each cycle = the agent paused with an
+/// `AskUserQuestion` and the user answered. The cap prevents a runaway
+/// grilling session from looping forever if the skill never exits.
+const MAX_ACP_FOLLOWUPS: u32 = 32;
+
+/// Run one workflow step over ACP. The first turn sends `inv.prompt`; if the
+/// turn paused on `AskUserQuestion`(s), we wait for the user's answer(s),
+/// format them into a follow-up user message, and prompt again. Loops until
+/// the agent stops asking (or `MAX_ACP_FOLLOWUPS` triggers a hard stop).
+///
+/// The connection is keyed by `run_id` (one per workflow run, reused across
+/// steps), so consecutive steps in the same run share context. It is torn
+/// down in `start_run`'s spawn block when the run finishes.
+async fn run_workflow_step_acp(
+    run_id: Uuid,
+    acp_conns: Arc<tokio::sync::Mutex<std::collections::HashMap<Uuid, Arc<AcpConn>>>>,
+    ask_rx: Arc<tokio::sync::Mutex<mpsc::Receiver<AskAnswer>>>,
+    inv: AgentInvocation,
+    sink: Arc<dyn EventSink>,
+    cancel: CancellationToken,
+) -> Result<AgentResult, String> {
+    let conn = {
+        let mut guard = acp_conns.lock().await;
+        if let Some(existing) = guard.get(&run_id) {
+            existing.clone()
+        } else {
+            let new_conn = AcpConn::connect(&inv.agent, &inv.working_dir, None).await?;
+            guard.insert(run_id, new_conn.clone());
+            new_conn
+        }
+    };
+
+    let mut prompt_text = inv.prompt.clone();
+    let mut accumulated = String::new();
+    let mut followups = 0u32;
+
+    loop {
+        let turn_text = conn
+            .prompt(
+                prompt_text.clone(),
+                inv.mode,
+                inv.step_id.clone(),
+                sink.clone(),
+                cancel.clone(),
+            )
+            .await?;
+        if !turn_text.is_empty() {
+            if !accumulated.is_empty() {
+                accumulated.push_str("\n\n");
+            }
+            accumulated.push_str(&turn_text);
+        }
+
+        let pending = conn.take_pending_questions().await;
+
+        // No tool-driven questions — the turn ended naturally. Either we're
+        // done (default), or this is an interactive step and the user gets to
+        // either continue the conversation or wrap up the step.
+        if pending.is_empty() {
+            if !inv.interactive {
+                return Ok(AgentResult {
+                    final_text: accumulated.trim().to_string(),
+                    exit_code: 0,
+                });
+            }
+
+            followups += 1;
+            if followups > MAX_ACP_FOLLOWUPS {
+                return Err(format!(
+                    "step '{}' exceeded {MAX_ACP_FOLLOWUPS} interactive turns",
+                    inv.step_id
+                ));
+            }
+
+            let request_id = uuid::Uuid::new_v4().to_string();
+            sink.emit(LogEvent::AwaitingMessage {
+                step_id: inv.step_id.clone(),
+                request_id: request_id.clone(),
+                last_text: turn_text.clone(),
+            });
+            let reply = collect_answer(&ask_rx, &cancel, &inv.step_id, &request_id).await?;
+            match reply {
+                None => {
+                    return Ok(AgentResult {
+                        final_text: accumulated.trim().to_string(),
+                        exit_code: 0,
+                    });
+                }
+                Some(parts) => {
+                    // respond_message stores the text in a single-element Vec;
+                    // join defensively in case future callers pass several.
+                    let next = parts.join("\n\n");
+                    if next.trim().is_empty() {
+                        return Ok(AgentResult {
+                            final_text: accumulated.trim().to_string(),
+                            exit_code: 0,
+                        });
+                    }
+                    prompt_text = next;
+                    continue;
+                }
+            }
+        }
+
+        followups += 1;
+        if followups > MAX_ACP_FOLLOWUPS {
+            return Err(format!(
+                "step '{}' exceeded {MAX_ACP_FOLLOWUPS} AskUserQuestion follow-ups",
+                inv.step_id
+            ));
+        }
+
+        // Wait for one matching answer per pending question (in submission
+        // order). A `None` payload means the user dismissed the dialog — we
+        // treat that as "stop the step" so they aren't trapped in a grill loop.
+        let mut formatted = String::new();
+        let step_id = inv.step_id.clone();
+        for ask in pending {
+            let answer = collect_answer(&ask_rx, &cancel, &step_id, &ask.request_id).await?;
+            let Some(answers) = answer else {
+                return Ok(AgentResult {
+                    final_text: accumulated.trim().to_string(),
+                    exit_code: 0,
+                });
+            };
+            for (q, a) in ask.questions.iter().zip(answers.iter()) {
+                let label = q
+                    .header
+                    .clone()
+                    .unwrap_or_else(|| q.question.clone());
+                let body = a.trim();
+                if body.is_empty() {
+                    continue;
+                }
+                if !formatted.is_empty() {
+                    formatted.push_str("\n\n");
+                }
+                formatted.push_str(&format!("- **{label}** — {}\n  → {body}", q.question));
+            }
+        }
+
+        prompt_text = if formatted.is_empty() {
+            "(no answer)".to_string()
+        } else {
+            format!("Here are my answers:\n\n{formatted}")
+        };
+    }
+}
+
+/// Wait for the user's answer to one `request_id`. Drops mismatched answers
+/// on the floor (logged) — they belong to a stale request the runner already
+/// moved past. Returns `Ok(None)` when the user dismissed the dialog.
+async fn collect_answer(
+    ask_rx: &Arc<tokio::sync::Mutex<mpsc::Receiver<AskAnswer>>>,
+    cancel: &CancellationToken,
+    step_id: &str,
+    request_id: &str,
+) -> Result<Option<Vec<String>>, String> {
+    let mut rx = ask_rx.lock().await;
+    loop {
+        tokio::select! {
+            _ = cancel.cancelled() => return Err("cancelled".to_string()),
+            msg = rx.recv() => {
+                let Some(msg) = msg else {
+                    return Err("ask channel closed".to_string());
+                };
+                if msg.step_id == step_id && msg.request_id == request_id {
+                    return Ok(msg.answers);
+                }
+                // Stale or out-of-order answer — skip and keep waiting.
+            }
+        }
+    }
+}
+
 /// One-shot CLI chat turn (the default transport).
 #[allow(clippy::too_many_arguments)]
 async fn run_chat_cli(
@@ -324,6 +503,8 @@ async fn run_chat_cli(
         working_dir,
         step_id: "chat".to_string(),
         resume: resume.filter(|s| !s.is_empty()),
+        transport: crate::engine::model::Transport::Cli,
+        interactive: false,
     };
     let res = match state.registry.get(agent) {
         Some(adapter) => run_agent(adapter, inv, sink, cancel).await?,
@@ -698,29 +879,43 @@ pub async fn start_run(
     let run_id = Uuid::new_v4();
     let cancel = CancellationToken::new();
     let (decision_tx, decision_rx) = mpsc::channel::<Decision>(8);
+    let (ask_answer_tx, ask_answer_rx) = mpsc::channel::<AskAnswer>(16);
 
     state.runs.lock().await.insert(
         run_id,
         Arc::new(RunCtl {
             cancel: cancel.clone(),
             decision_tx,
+            ask_answer_tx,
         }),
     );
 
     let registry = state.registry.clone();
     let runs = state.runs.clone();
+    let acp_conns = state.acp_conns.clone();
     let sink: Arc<dyn EventSink> = Arc::new(ChannelSink(on_log));
     let data_dir = app.path().app_data_dir().ok();
     let workflow_name = workflow.name.clone();
+    let ask_rx = Arc::new(tokio::sync::Mutex::new(ask_answer_rx));
 
     let runner: AgentRunner = {
         let registry = registry.clone();
+        let acp_conns = acp_conns.clone();
+        let ask_rx = ask_rx.clone();
+        let run_uuid = run_id;
         Arc::new(move |inv, sink, cancel| {
             let registry = registry.clone();
+            let acp_conns = acp_conns.clone();
+            let ask_rx = ask_rx.clone();
             Box::pin(async move {
-                match registry.get(&inv.agent) {
-                    Some(adapter) => run_agent(adapter, inv, sink, cancel).await,
-                    None => Err(format!("unknown agent '{}'", inv.agent)),
+                match inv.transport {
+                    Transport::Cli => match registry.get(&inv.agent) {
+                        Some(adapter) => run_agent(adapter, inv, sink, cancel).await,
+                        None => Err(format!("unknown agent '{}'", inv.agent)),
+                    },
+                    Transport::Acp => {
+                        run_workflow_step_acp(run_uuid, acp_conns, ask_rx, inv, sink, cancel).await
+                    }
                 }
             })
         })
@@ -746,6 +941,12 @@ pub async fn start_run(
         .await;
 
         runs.lock().await.remove(&run_id);
+
+        // Tear down the per-run ACP connection (if the workflow opened one).
+        let conn = acp_conns.lock().await.remove(&run_id);
+        if let Some(conn) = conn {
+            conn.shutdown().await;
+        }
 
         if let Some(dir) = data_dir {
             runstore::save(
@@ -780,6 +981,64 @@ pub async fn approve(
             .send(decision)
             .await
             .map_err(|_| "run is not awaiting approval".to_string()),
+        None => Err("run not found".into()),
+    }
+}
+
+/// Deliver the user's answers to an `AskUserQuestion` raised during a workflow
+/// step (the `respond_permission` analogue for the `ask_user_question` event).
+/// Pass `answers: None` for "user dismissed the dialog" — the runner takes
+/// that as a signal to end the step instead of looping forever.
+#[tauri::command]
+pub async fn respond_ask(
+    state: State<'_, AppState>,
+    run_id: String,
+    step_id: String,
+    request_id: String,
+    answers: Option<Vec<String>>,
+) -> Result<(), String> {
+    let id = Uuid::parse_str(&run_id).map_err(|e| e.to_string())?;
+    let ctl = state.runs.lock().await.get(&id).cloned();
+    match ctl {
+        Some(ctl) => ctl
+            .ask_answer_tx
+            .send(AskAnswer {
+                step_id,
+                request_id,
+                answers,
+            })
+            .await
+            .map_err(|_| "run is not awaiting an answer".to_string()),
+        None => Err("run not found".into()),
+    }
+}
+
+/// Reply to an `awaiting_message` checkpoint in an interactive workflow step.
+/// `message = Some(text)` sends `text` as the next ACP `session/prompt`;
+/// `message = None` ends the step with whatever the agent has produced so far.
+///
+/// Shares the same mpsc channel as `respond_ask` — the runner uses request_id
+/// to know which checkpoint each reply belongs to.
+#[tauri::command]
+pub async fn respond_message(
+    state: State<'_, AppState>,
+    run_id: String,
+    step_id: String,
+    request_id: String,
+    message: Option<String>,
+) -> Result<(), String> {
+    let id = Uuid::parse_str(&run_id).map_err(|e| e.to_string())?;
+    let ctl = state.runs.lock().await.get(&id).cloned();
+    match ctl {
+        Some(ctl) => ctl
+            .ask_answer_tx
+            .send(AskAnswer {
+                step_id,
+                request_id,
+                answers: message.map(|m| vec![m]),
+            })
+            .await
+            .map_err(|_| "run is not awaiting a reply".to_string()),
         None => Err("run not found".into()),
     }
 }

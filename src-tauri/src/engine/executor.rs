@@ -1,5 +1,5 @@
 use super::context::{RunContext, StepResult};
-use super::model::{AgentInvocation, AgentResult, Mode, Workflow};
+use super::model::{AgentInvocation, AgentResult, Mode, Transport, Workflow};
 use super::{expr, Decision, EventSink, LogEvent};
 use std::collections::HashMap;
 use std::future::Future;
@@ -129,6 +129,12 @@ pub async fn run_workflow(
                 .mode
                 .or(workflow.defaults.mode)
                 .unwrap_or(Mode::AcceptEdits);
+            let transport = step
+                .config
+                .transport
+                .or(workflow.defaults.transport)
+                .unwrap_or(Transport::Cli);
+            let interactive = step.config.interactive;
 
             // Run the step, retrying while `until` is false (up to `max`).
             let max_attempts = step.config.retry.as_ref().map(|r| r.max.max(1)).unwrap_or(1);
@@ -156,6 +162,8 @@ pub async fn run_workflow(
                     working_dir: working_dir.clone(),
                     step_id: step.id.clone(),
                     resume: None,
+                    transport,
+                    interactive,
                 };
 
                 let result = match (runner)(invocation, sink.clone(), cancel.clone()).await {

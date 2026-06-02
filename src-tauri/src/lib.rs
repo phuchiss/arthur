@@ -59,6 +59,8 @@ pub fn run() {
             commands::list_slash_commands,
             commands::start_run,
             commands::approve,
+            commands::respond_ask,
+            commands::respond_message,
             commands::cancel,
             commands::list_changed_files,
             commands::list_all_files,

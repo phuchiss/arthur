@@ -1,6 +1,23 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// How a step talks to its agent.
+///
+/// - `Cli` (default): one-shot `claude -p` / `codex` / `gemini` subprocess,
+///   no interactive tool calls (skills like `grill-me` that try to ask the
+///   user can't pause for input — they just complete in one turn).
+/// - `Acp`: long-lived [Agent Client Protocol](https://agentclientprotocol.com)
+///   connection, so the step can intercept `AskUserQuestion` tool calls,
+///   surface them to the UI as a dialog, and feed the user's answers back as
+///   a follow-up `session/prompt` until the agent stops asking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Transport {
+    #[default]
+    Cli,
+    Acp,
+}
+
 /// Permission mode a step's agent runs under. Maps to per-CLI permission flags
 /// (in `agents/`) and to the ACP `session/request_permission` auto-answer
 /// (in `acp/`).
@@ -41,6 +58,20 @@ pub struct StepConfig {
     /// Jump to the step with this id.
     pub goto: Option<String>,
     pub retry: Option<Retry>,
+    /// Override the transport for this step (CLI vs ACP). Falls back to the
+    /// workflow's `defaults.transport`, then to [`Transport::Cli`].
+    pub transport: Option<Transport>,
+    /// When true (and `transport` resolves to ACP), the step keeps the agent
+    /// session open after each turn instead of finalising: the UI surfaces a
+    /// reply composer, and whatever the user types becomes the next
+    /// `session/prompt`. The step ends when the user explicitly clicks
+    /// "End step" (or when the run is cancelled).
+    ///
+    /// Lets skills that pose questions in plain markdown (e.g. `grill-me`)
+    /// actually pause for the user — they don't call `AskUserQuestion`, so
+    /// the tool-call path can't catch them.
+    #[serde(default)]
+    pub interactive: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,6 +87,7 @@ pub struct Defaults {
     pub agent: Option<String>,
     pub model: Option<String>,
     pub mode: Option<Mode>,
+    pub transport: Option<Transport>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,6 +114,11 @@ pub struct AgentInvocation {
     /// Prior session id to continue, if any (e.g. claude `--resume`). Lets a
     /// multi-turn chat keep context across one-shot CLI invocations.
     pub resume: Option<String>,
+    /// Which transport the runner should use to run this invocation.
+    pub transport: Transport,
+    /// True when the step opts into the interactive reply loop (ACP only —
+    /// no-op under CLI). See [`StepConfig::interactive`].
+    pub interactive: bool,
 }
 
 #[derive(Debug, Clone, Default)]

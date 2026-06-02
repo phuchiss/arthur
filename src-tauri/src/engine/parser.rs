@@ -237,6 +237,43 @@ goto: test
     }
 
     #[test]
+    fn parses_transport_and_interactive() {
+        let src = r#"## grill
+```step
+transport: acp
+interactive: true
+```
+ask away
+"#;
+        let wf = parse_workflow(src, None).unwrap();
+        let cfg = &wf.steps[0].config;
+        assert_eq!(
+            cfg.transport,
+            Some(crate::engine::model::Transport::Acp),
+            "transport: acp must deserialise to Transport::Acp"
+        );
+        assert!(cfg.interactive, "interactive: true must deserialise as true");
+    }
+
+    /// Reproduce a real-world workflow file that paired `interactive: true`
+    /// with a trailing inline comment (`# ← ใหม่`) and an unknown frontmatter
+    /// key (`autonomy:`). Both must parse cleanly: the comment is stripped by
+    /// YAML, the unknown key is silently ignored by serde, and `interactive`
+    /// still deserialises as true.
+    #[test]
+    fn parses_interactive_with_inline_comment_and_unknown_keys() {
+        let src = "---\nname: Add Feature with GM\ninputs: [feature_description]\ndefaults: { agent: claude, autonomy: edit }\n---\n\n## grill\n```step\nagent: claude\nmodel: opus\nmode: auto\ntransport: acp\ninteractive: true     # ← ใหม่\noutput: grill\n```\nbody\n";
+        let wf = parse_workflow(src, None).unwrap();
+        assert_eq!(wf.name, "Add Feature with GM");
+        let grill = wf.steps.iter().find(|s| s.id == "grill").unwrap();
+        assert_eq!(
+            grill.config.transport,
+            Some(crate::engine::model::Transport::Acp)
+        );
+        assert!(grill.config.interactive, "inline `# ← ใหม่` comment must not break parsing");
+    }
+
+    #[test]
     fn example_playbooks_parse() {
         let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../.arthur/workflows");
         let mut count = 0;

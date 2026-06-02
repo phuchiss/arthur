@@ -370,6 +370,30 @@ export function ChatView({
   // time; the next agent prompt is blocked until done.
   const workflowRunIdRef = useRef<string | null>(null);
   const [approvalReq, setApprovalReq] = useState<{ stepId: string; title: string } | null>(null);
+  // `AskUserQuestion` raised from inside an inline workflow run — separate
+  // from the chat-mode `askDialog` because workflow runs must respond via the
+  // `respond_ask` Tauri command (matched by request_id), not by composing a
+  // follow-up chat message.
+  const [workflowAskDialog, setWorkflowAskDialog] = useState<{
+    stepId: string;
+    requestId: string;
+    questions: UserQuestion[];
+  } | null>(null);
+  // `interactive: true` step is paused for a free-form user reply during an
+  // inline workflow run. Submitting calls `respond_message`.
+  const [workflowAwaitingMsg, setWorkflowAwaitingMsg] = useState<{
+    stepId: string;
+    requestId: string;
+    lastText: string;
+  } | null>(null);
+  const [workflowReplyDraft, setWorkflowReplyDraft] = useState("");
+  // Input collection modal: shown when a slash-command workflow needs more
+  // inputs than the user provided after the slug (multi-input workflows, or
+  // single-input invoked bare).
+  const [workflowInputPrompt, setWorkflowInputPrompt] = useState<{
+    wf: WorkflowSummary;
+    values: Record<string, string>;
+  } | null>(null);
   // Output we'll auto-prepend to the very next agent prompt so the chat agent
   // has context about what the workflow produced. Consumed after one use.
   const [pendingContext, setPendingContext] = useState<string | null>(null);
@@ -564,18 +588,13 @@ export function ChatView({
   // Run a workflow inline in the chat thread. Each LogEvent becomes part of a
   // single accumulating assistant message; the final-step stdout is stashed
   // into pendingContext so the next agent prompt has context to refer to.
-  const runWorkflowInline = async (wf: WorkflowSummary, inputArg: string) => {
-    const inputs: Record<string, string> = {};
-    if (wf.inputs.length > 0) {
-      inputs[wf.inputs[0]] = inputArg;
-      for (let i = 1; i < wf.inputs.length; i++) inputs[wf.inputs[i]] = "";
-    }
-
+  const runWorkflowInline = async (wf: WorkflowSummary, inputs: Record<string, string>) => {
+    const firstInputValue = wf.inputs.length > 0 ? inputs[wf.inputs[0]] ?? "" : "";
     if (!title) setTitle(`/${wf.name}`);
     const t = nowTime();
     setMessages((p) => [
       ...p,
-      { role: "user", text: `/${wf.name}${inputArg ? " " + inputArg : ""}` },
+      { role: "user", text: `/${wf.name}${firstInputValue ? " " + firstInputValue : ""}` },
       { role: "assistant", text: "", streaming: true, agent: "workflow" },
     ]);
     setMsgTimes((p) => [...p, t, t]);
@@ -647,6 +666,27 @@ export function ChatView({
           case "rejected":
             appendToLast(`✕ rejected ${ev.step_id}\n`);
             break;
+          case "ask_user_question":
+            setWorkflowAskDialog({
+              stepId: ev.step_id,
+              requestId: ev.request_id,
+              questions: ev.questions,
+            });
+            appendToLast(
+              `❓ awaiting answer (${ev.questions.length} question${
+                ev.questions.length === 1 ? "" : "s"
+              })\n`
+            );
+            break;
+          case "awaiting_message":
+            setWorkflowAwaitingMsg({
+              stepId: ev.step_id,
+              requestId: ev.request_id,
+              lastText: ev.last_text,
+            });
+            setWorkflowReplyDraft("");
+            appendToLast("❓ awaiting your reply (type below, or End step)\n");
+            break;
           case "done":
             appendToLast(`\n✔ workflow done\n`);
             finalize();
@@ -679,6 +719,9 @@ export function ChatView({
 
     workflowRunIdRef.current = null;
     setApprovalReq(null);
+    setWorkflowAskDialog(null);
+    setWorkflowAwaitingMsg(null);
+    setWorkflowReplyDraft("");
     setBusy(false);
 
     if (result.ok && result.lastStepText.trim()) {
@@ -879,7 +922,26 @@ export function ChatView({
     // /<workflow> intercept: run inline instead of talking to the agent.
     const wfCmd = tryParseWorkflowCommand(draftText, workflows);
     if (wfCmd) {
-      await runWorkflowInline(wfCmd.wf, wfCmd.inputArg);
+      const { wf, inputArg } = wfCmd;
+      // No inputs declared: run immediately with empty inputs map.
+      // Single input + slash-arg supplied: run with that arg.
+      // Anything else (multi-input, or bare invocation of a 1-input workflow):
+      // open a modal so the user can fill the remaining values.
+      const needsPrompt =
+        wf.inputs.length > 1 ||
+        (wf.inputs.length === 1 && inputArg === "");
+      if (needsPrompt) {
+        const values: Record<string, string> = {};
+        wf.inputs.forEach((k, i) => {
+          values[k] = i === 0 ? inputArg : "";
+        });
+        setWorkflowInputPrompt({ wf, values });
+        setDraft("");
+        return;
+      }
+      const inputs: Record<string, string> = {};
+      if (wf.inputs.length === 1) inputs[wf.inputs[0]] = inputArg;
+      await runWorkflowInline(wf, inputs);
       return;
     }
 
@@ -1348,6 +1410,203 @@ export function ChatView({
               </button>
               <button className="btn-primary" onClick={() => decideApproval("approve")}>
                 Approve
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {workflowInputPrompt && (
+        <div className="modal-backdrop" onClick={() => setWorkflowInputPrompt(null)}>
+          <div
+            className="reply-modal"
+            onClick={(e) => e.stopPropagation()}
+            style={{ width: "min(560px, 92vw)", maxHeight: "80vh" }}
+          >
+            <div className="reply-modal__head">
+              <h3 className="reply-modal__title">
+                Inputs for /{workflowInputPrompt.wf.name}
+              </h3>
+              <span className="reply-modal__hint">
+                {workflowInputPrompt.wf.inputs.length} field
+                {workflowInputPrompt.wf.inputs.length === 1 ? "" : "s"}
+              </span>
+            </div>
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: 10,
+                overflowY: "auto",
+              }}
+            >
+              {workflowInputPrompt.wf.inputs.map((name, i) => (
+                <label
+                  key={name}
+                  style={{ display: "flex", flexDirection: "column", gap: 4 }}
+                >
+                  <span
+                    style={{
+                      fontSize: 12,
+                      fontFamily: "var(--font-mono)",
+                      color: "var(--faint)",
+                    }}
+                  >
+                    {name}
+                  </span>
+                  <textarea
+                    className="reply-modal__textarea"
+                    rows={2}
+                    value={workflowInputPrompt.values[name] ?? ""}
+                    autoFocus={i === 0 && !workflowInputPrompt.values[name]}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setWorkflowInputPrompt((prev) =>
+                        prev
+                          ? { ...prev, values: { ...prev.values, [name]: v } }
+                          : prev
+                      );
+                    }}
+                  />
+                </label>
+              ))}
+            </div>
+            <div className="reply-modal__actions">
+              <button
+                className="btn-ghost"
+                onClick={() => setWorkflowInputPrompt(null)}
+              >
+                Cancel
+              </button>
+              <span style={{ flex: 1 }} />
+              <button
+                className="btn-primary"
+                onClick={() => {
+                  const { wf, values } = workflowInputPrompt;
+                  setWorkflowInputPrompt(null);
+                  runWorkflowInline(wf, values);
+                }}
+              >
+                Run
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {workflowAskDialog && (
+        <AskUserDialog
+          questions={workflowAskDialog.questions}
+          onSubmit={(answers) => {
+            if (workflowRunIdRef.current) {
+              api
+                .respondAsk(
+                  workflowRunIdRef.current,
+                  workflowAskDialog.stepId,
+                  workflowAskDialog.requestId,
+                  answers
+                )
+                .catch(() => {});
+            }
+            setWorkflowAskDialog(null);
+          }}
+          onCancel={() => {
+            if (workflowRunIdRef.current) {
+              api
+                .respondAsk(
+                  workflowRunIdRef.current,
+                  workflowAskDialog.stepId,
+                  workflowAskDialog.requestId,
+                  null
+                )
+                .catch(() => {});
+            }
+            setWorkflowAskDialog(null);
+          }}
+        />
+      )}
+
+      {workflowAwaitingMsg && (
+        <div className="modal-backdrop">
+          <div className="reply-modal">
+            <div className="reply-modal__head">
+              <h3 className="reply-modal__title">
+                Reply to {workflowAwaitingMsg.stepId}
+              </h3>
+              <span className="reply-modal__hint">
+                {workflowAwaitingMsg.lastText.length.toLocaleString()} chars · scroll
+                to read
+              </span>
+            </div>
+            <pre className="reply-modal__question">
+              {workflowAwaitingMsg.lastText}
+            </pre>
+            <textarea
+              className="reply-modal__textarea"
+              value={workflowReplyDraft}
+              onChange={(e) => setWorkflowReplyDraft(e.target.value)}
+              placeholder="Type your reply…"
+              rows={4}
+              autoFocus
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                  e.preventDefault();
+                  const text = workflowReplyDraft.trim();
+                  if (text && workflowRunIdRef.current) {
+                    api
+                      .respondMessage(
+                        workflowRunIdRef.current,
+                        workflowAwaitingMsg.stepId,
+                        workflowAwaitingMsg.requestId,
+                        text
+                      )
+                      .catch(() => {});
+                    setWorkflowAwaitingMsg(null);
+                    setWorkflowReplyDraft("");
+                  }
+                }
+              }}
+            />
+            <div className="reply-modal__actions">
+              <button
+                className="btn-ghost"
+                onClick={() => {
+                  if (workflowRunIdRef.current) {
+                    api
+                      .respondMessage(
+                        workflowRunIdRef.current,
+                        workflowAwaitingMsg.stepId,
+                        workflowAwaitingMsg.requestId,
+                        null
+                      )
+                      .catch(() => {});
+                  }
+                  setWorkflowAwaitingMsg(null);
+                  setWorkflowReplyDraft("");
+                }}
+              >
+                End step
+              </button>
+              <span style={{ flex: 1 }} />
+              <button
+                className="btn-primary"
+                disabled={!workflowReplyDraft.trim()}
+                onClick={() => {
+                  const text = workflowReplyDraft.trim();
+                  if (!text || !workflowRunIdRef.current) return;
+                  api
+                    .respondMessage(
+                      workflowRunIdRef.current,
+                      workflowAwaitingMsg.stepId,
+                      workflowAwaitingMsg.requestId,
+                      text
+                    )
+                    .catch(() => {});
+                  setWorkflowAwaitingMsg(null);
+                  setWorkflowReplyDraft("");
+                }}
+              >
+                Send (⌘↩)
               </button>
             </div>
           </div>

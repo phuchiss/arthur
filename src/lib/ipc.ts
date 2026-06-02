@@ -12,6 +12,11 @@ export type Retry = { max: number; until: string };
 /** Permission mode (mirrors Rust `Mode`, serde snake_case). */
 export type Mode = "ask" | "accept_edits" | "plan" | "auto";
 
+/** Transport for a workflow step (mirrors Rust `Transport`, serde snake_case).
+ *  `acp` keeps a long-lived Agent Client Protocol connection so skills that
+ *  call `AskUserQuestion` (e.g. `grill-me`) can pause for user input. */
+export type Transport = "cli" | "acp";
+
 export const MODE_LABELS: Record<Mode, string> = {
   ask: "Ask permissions",
   accept_edits: "Accept edits",
@@ -28,10 +33,15 @@ export type StepConfig = {
   when?: string;
   goto?: string;
   retry?: Retry;
+  transport?: Transport;
+  /** When true (and transport=acp), the step pauses for a user reply after
+   *  each agent turn — needed for skills like grill-me that ask questions in
+   *  plain markdown rather than via the AskUserQuestion tool. */
+  interactive?: boolean;
 };
 
 export type Step = { id: string; title: string; config: StepConfig; prompt: string };
-export type Defaults = { agent?: string; model?: string; mode?: Mode };
+export type Defaults = { agent?: string; model?: string; mode?: Mode; transport?: Transport };
 export type Workflow = {
   name: string;
   inputs: string[];
@@ -99,7 +109,14 @@ export type LogEvent =
   | {
       type: "ask_user_question";
       step_id: string;
+      request_id: string;
       questions: UserQuestion[];
+    }
+  | {
+      type: "awaiting_message";
+      step_id: string;
+      request_id: string;
+      last_text: string;
     }
   | {
       type: "exit_plan_mode";
@@ -246,6 +263,22 @@ export const api = {
   ) => invoke<string>("start_run", { ...args, onLog }),
   approve: (runId: string, decision: "approve" | "reject") =>
     invoke<void>("approve", { runId, decision }),
+  /** Deliver answers from the `AskUserQuestion` dialog in a workflow run.
+   *  Pass `answers: null` when the user dismissed without answering. */
+  respondAsk: (
+    runId: string,
+    stepId: string,
+    requestId: string,
+    answers: string[] | null,
+  ) => invoke<void>("respond_ask", { runId, stepId, requestId, answers }),
+  /** Reply to an `awaiting_message` checkpoint in an interactive step.
+   *  `message: string` continues the conversation; `null` ends the step. */
+  respondMessage: (
+    runId: string,
+    stepId: string,
+    requestId: string,
+    message: string | null,
+  ) => invoke<void>("respond_message", { runId, stepId, requestId, message }),
   cancel: (runId: string) => invoke<void>("cancel", { runId }),
   listChangedFiles: (sessionKey: string, projectDir: string) =>
     invoke<ChangedFilesResult>("list_changed_files", { sessionKey, projectDir }),

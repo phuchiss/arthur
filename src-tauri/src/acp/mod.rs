@@ -35,6 +35,17 @@ struct TurnState {
     mode: Mode,
     /// Accumulated assistant message text, returned as the turn's final text.
     text: String,
+    /// `AskUserQuestion` tool calls observed during the current turn, in order.
+    /// Each carries the request_id we already emitted to the UI. The workflow
+    /// runner drains this after `prompt()` returns to learn what's pending.
+    pending_questions: Vec<PendingAsk>,
+}
+
+/// One unresolved `AskUserQuestion` invocation from the current turn.
+#[derive(Debug, Clone)]
+pub struct PendingAsk {
+    pub request_id: String,
+    pub questions: Vec<UserQuestion>,
 }
 
 /// State the reader task needs; shared with the connection via `Arc`.
@@ -253,6 +264,7 @@ impl AcpConn {
             turn.step_id = step_id;
             turn.mode = mode;
             turn.text = String::new();
+            turn.pending_questions.clear();
         }
         if let Some(sid) = self.session_id().await {
             // Surface the session id so the UI can show it (parity with CLI path).
@@ -285,6 +297,13 @@ impl AcpConn {
         let text = std::mem::take(&mut turn.text);
         turn.sink = None;
         result.map(|_| text)
+    }
+
+    /// Drain the `AskUserQuestion` invocations seen during the most recent
+    /// `prompt()` turn. Workflow runs use this to know whether the agent paused
+    /// for user input and which request ids to wait for answers on.
+    pub async fn take_pending_questions(&self) -> Vec<PendingAsk> {
+        std::mem::take(&mut self.shared.turn.lock().await.pending_questions)
     }
 
     /// Resolve an in-flight Ask-mode permission request. Pass `None` to cancel
@@ -476,8 +495,14 @@ async fn handle_update(shared: &Arc<Shared>, params: &Value) {
             // can't fulfil — intercept it and surface as a dialog instead of
             // the generic activity row.
             if let Some(questions) = detect_ask_user_question(title, update) {
+                let request_id = uuid::Uuid::new_v4().to_string();
+                turn.pending_questions.push(PendingAsk {
+                    request_id: request_id.clone(),
+                    questions: questions.clone(),
+                });
                 sink.emit(LogEvent::AskUserQuestion {
                     step_id: step_id.clone(),
+                    request_id,
                     questions,
                 });
                 return;

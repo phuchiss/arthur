@@ -1466,6 +1466,81 @@ input, textarea, select {
 .log.info { color: var(--accent-ink); }
 .log-step { color: var(--faint); }
 
+/* Modal for `interactive: true` workflow steps: shows the agent's last
+   message (scrollable) so the user can read the question without dismissing
+   the modal, plus a textarea to reply. Sized large so a long question is
+   actually readable. */
+.reply-modal {
+  background: var(--paper);
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.18);
+  width: min(880px, 92vw);
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  padding: 18px 20px 16px;
+  gap: 12px;
+}
+.reply-modal__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.reply-modal__title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.reply-modal__hint {
+  font-size: 11px;
+  color: var(--faint);
+  font-family: var(--font-mono);
+}
+.reply-modal__question {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  background: var(--bg);
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  padding: 12px 14px;
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--ink);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.reply-modal__textarea {
+  flex: 0 0 auto;
+  width: 100%;
+  resize: vertical;
+  min-height: 80px;
+  max-height: 200px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 10px 12px;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  background: var(--paper);
+  color: var(--ink);
+  box-sizing: border-box;
+}
+.reply-modal__textarea:focus {
+  outline: none;
+  border-color: color-mix(in oklch, var(--accent-ink) 50%, var(--hairline));
+}
+.reply-modal__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 /* Approval modal */
 .modal-backdrop {
   position: absolute;

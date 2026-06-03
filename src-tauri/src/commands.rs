@@ -292,7 +292,13 @@ pub async fn start_chat(
     };
 
     let cancel = CancellationToken::new();
-    state.chats.lock().await.insert(id, cancel.clone());
+    {
+        let mut chats = state.chats.lock().await;
+        if chats.contains_key(&id) {
+            return Err("Chat is active in another window".into());
+        }
+        chats.insert(id, cancel.clone());
+    }
     let sink: Arc<dyn EventSink> = Arc::new(ChannelSink(on_log));
 
     let result = if transport.as_deref() == Some("acp") {

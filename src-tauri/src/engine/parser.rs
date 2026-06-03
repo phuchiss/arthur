@@ -275,7 +275,7 @@ ask away
 
     #[test]
     fn example_playbooks_parse() {
-        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../.arthur/workflows");
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../.arthur/sample-workflows");
         let mut count = 0;
         for entry in std::fs::read_dir(dir).expect("workflows dir should exist") {
             let path = entry.unwrap().path();

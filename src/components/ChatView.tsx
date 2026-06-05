@@ -795,8 +795,13 @@ export function ChatView({
   // behave identically (resume handling, error display, pendingContext reset).
   const runAgentTurn = async (prompt: string, displayText: string) => {
     setBusy(true);
+    // First turn = no title yet. Stage a first-line placeholder now so the
+    // sidebar isn't empty mid-stream; after the turn we'll ask the agent for
+    // a context-aware replacement (see autoTitleAfterTurn below).
+    const wasUntitled = !title;
+    const userTextForTitle = displayText || prompt;
     if (!title) {
-      const firstLine = (displayText || prompt).split("\n").find((l) => l.trim());
+      const firstLine = userTextForTitle.split("\n").find((l) => l.trim());
       setTitle((firstLine ?? "(attachments)").slice(0, 60));
     }
     const t = nowTime();
@@ -812,10 +817,16 @@ export function ChatView({
     // restart this exact turn once without --resume so the user doesn't have
     // to hit Send again.
     let staleResume = false;
+    // Mirror the assistant text we stream into the message so we can hand a
+    // clean snapshot to the title generator after the turn ends, without
+    // racing React state.
+    let assistantBuf = "";
     const channel = new Channel<LogEvent>();
     channel.onmessage = (ev) => {
       if (ev.type === "stdout" || ev.type === "stderr") {
-        appendToLast(tx === "acp" ? ev.line : `${ev.line}\n`);
+        const chunk = tx === "acp" ? ev.line : `${ev.line}\n`;
+        appendToLast(chunk);
+        assistantBuf += chunk;
         if (ev.type === "stderr" && /no conversation found/i.test(ev.line)) {
           staleResume = true;
           sessionRef.current = null;
@@ -872,10 +883,13 @@ export function ChatView({
         }
         return next;
       });
+      assistantBuf = "";
       const retryChannel = new Channel<LogEvent>();
       retryChannel.onmessage = (ev) => {
         if (ev.type === "stdout" || ev.type === "stderr") {
-          appendToLast(`${ev.line}\n`);
+          const chunk = `${ev.line}\n`;
+          appendToLast(chunk);
+          assistantBuf += chunk;
         } else if (ev.type === "session_id") {
           sessionRef.current = ev.session_id;
           setHasSession(true);
@@ -914,6 +928,25 @@ export function ChatView({
     // The context preamble travelled with this turn — drop it so it doesn't
     // re-cling to subsequent prompts.
     setPendingContext(null);
+
+    // First-turn title refinement: replace the first-line placeholder with a
+    // 3-6 word summary the agent derives from the actual exchange. Fire-and-
+    // forget; if the call fails the placeholder stays.
+    if (wasUntitled && assistantBuf.trim()) {
+      api
+        .generateChatTitle({
+          agent,
+          userText: userTextForTitle,
+          assistantText: assistantBuf,
+          model: model || undefined,
+          projectDir,
+        })
+        .then((next) => {
+          const cleaned = next.trim();
+          if (cleaned) setTitle(cleaned);
+        })
+        .catch(() => {});
+    }
   };
 
   const send = async () => {

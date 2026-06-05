@@ -265,6 +265,64 @@ pub async fn cancel_improve(state: State<'_, AppState>, improve_id: String) -> R
     Ok(())
 }
 
+/// Ask the chosen agent to derive a short chat title from the first
+/// user/assistant exchange. Read-only, one-shot — mirrors the
+/// `improve_workflow` capture pattern so codex's file-based final-message
+/// capture also works.
+#[tauri::command]
+pub async fn generate_chat_title(
+    state: State<'_, AppState>,
+    agent: String,
+    user_text: String,
+    assistant_text: String,
+    model: Option<String>,
+    project_dir: Option<String>,
+) -> Result<String, String> {
+    let registry = state.registry.clone();
+
+    let working_dir = project_dir
+        .filter(|p| !p.is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+
+    let inv = AgentInvocation {
+        agent: agent.clone(),
+        model,
+        mode: Mode::Plan,
+        prompt: build_title_prompt(&user_text, &assistant_text),
+        working_dir,
+        step_id: "title".to_string(),
+        resume: None,
+        transport: Transport::Cli,
+        interactive: false,
+    };
+
+    let cancel = CancellationToken::new();
+    let collector = Arc::new(CollectSink::default());
+    let sink: Arc<dyn EventSink> = collector.clone();
+    let result = match registry.get(&agent) {
+        Some(adapter) => run_agent(adapter, inv, sink, cancel).await,
+        None => Err(format!("unknown agent '{agent}'")),
+    };
+
+    let res = result?;
+    if res.exit_code != 0 {
+        let stderr = collector.stderr_text();
+        let detail = if stderr.trim().is_empty() {
+            res.final_text.trim().to_string()
+        } else {
+            stderr.trim().to_string()
+        };
+        return Err(format!("{agent} exited with code {}: {detail}", res.exit_code));
+    }
+
+    let title = sanitize_title(&res.final_text);
+    if title.is_empty() {
+        return Err(format!("{agent} returned no title"));
+    }
+    Ok(title)
+}
+
 /// Run a single chat turn, streaming activity to `on_log`. `transport` selects
 /// the engine: "cli" (one-shot CLI invocation) or "acp" (a long-lived Agent
 /// Client Protocol connection reused across turns, keyed by `chat_id`).
@@ -867,6 +925,81 @@ Format rules:
     format!(
         "{guide}\n\nTask: {task}\n\nCurrent playbook:\n-----\n{content}\n-----\n\nReturn ONLY the complete improved playbook as raw Markdown. Do not wrap your answer in code fences and do not add any commentary before or after it."
     )
+}
+
+/// Cap each side of the exchange before feeding it to the title prompt so we
+/// don't blow up a long assistant reply into a multi-thousand-token call.
+const TITLE_INPUT_CAP: usize = 1500;
+
+fn truncate_for_title(text: &str) -> String {
+    let trimmed = text.trim();
+    if trimmed.chars().count() <= TITLE_INPUT_CAP {
+        return trimmed.to_string();
+    }
+    let head: String = trimmed.chars().take(TITLE_INPUT_CAP).collect();
+    format!("{head}…")
+}
+
+fn build_title_prompt(user_text: &str, assistant_text: &str) -> String {
+    let user = truncate_for_title(user_text);
+    let assistant = truncate_for_title(assistant_text);
+    format!(
+        "Read the user message and the assistant's reply below, then produce a concise chat title that captures the topic.\n\
+         \n\
+         Rules:\n\
+         - 3 to 6 words.\n\
+         - Match the language of the user message.\n\
+         - No quotes, no trailing punctuation, no markdown, no emoji.\n\
+         - Output ONLY the title text on a single line. No preamble, no explanation.\n\
+         \n\
+         User:\n{user}\n\n\
+         Assistant:\n{assistant}\n"
+    )
+}
+
+/// Tighten an agent's title response into something fit for the sidebar.
+/// The model may wrap it in quotes, append a period, or prepend "Title:" —
+/// strip all of that and clamp to a reasonable display width.
+fn sanitize_title(raw: &str) -> String {
+    let mut line = raw
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("")
+        .to_string();
+
+    // Drop a leading "Title:" / "title -" style label some models add.
+    for prefix in ["Title:", "title:", "Title -", "title -", "Chat title:"] {
+        if let Some(rest) = line.strip_prefix(prefix) {
+            line = rest.trim().to_string();
+            break;
+        }
+    }
+
+    let trimmed: &str = line
+        .trim_matches(|c: char| {
+            c.is_whitespace()
+                || c == '"'
+                || c == '\''
+                || c == '`'
+                || c == '“'
+                || c == '”'
+                || c == '‘'
+                || c == '’'
+                || c == '.'
+                || c == ','
+                || c == ';'
+                || c == ':'
+                || c == '!'
+                || c == '?'
+        });
+
+    let total = trimmed.chars().count();
+    let mut out: String = trimmed.chars().take(60).collect();
+    if total > 60 {
+        out.push('…');
+    }
+    out
 }
 
 #[tauri::command]

@@ -127,6 +127,7 @@ pub fn run() {
             commands::create_workflow,
             commands::improve_workflow,
             commands::cancel_improve,
+            commands::generate_chat_title,
             commands::start_chat,
             commands::cancel_chat,
             commands::close_chat,

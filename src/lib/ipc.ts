@@ -228,6 +228,13 @@ export const api = {
     projectDir?: string;
   }) => invoke<string>("improve_workflow", args),
   cancelImprove: (improveId: string) => invoke<void>("cancel_improve", { improveId }),
+  generateChatTitle: (args: {
+    agent: string;
+    userText: string;
+    assistantText: string;
+    model?: string;
+    projectDir?: string;
+  }) => invoke<string>("generate_chat_title", args),
   startChat: (
     args: {
       chatId: string;

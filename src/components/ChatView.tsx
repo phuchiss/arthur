@@ -20,6 +20,7 @@ import { Icon } from "./Icon";
 import { AskUserDialog } from "./AskUserDialog";
 import { ExitPlanDialog } from "./ExitPlanDialog";
 import { FilesPanel } from "./FilesPanel";
+import { TypingGirl } from "./TypingGirl";
 
 const AGENTS = ["claude", "codex", "gemini"];
 const MODES: Mode[] = ["ask", "accept_edits", "plan", "auto"];
@@ -1263,6 +1264,7 @@ export function ChatView({
           onClose={() => setFilesOpen(false)}
           onCountChange={setFilesCount}
         />
+        <TypingGirl busy={busy} />
       </div>
 
       <div className="composer">
